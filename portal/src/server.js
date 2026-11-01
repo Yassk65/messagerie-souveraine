@@ -1092,6 +1092,7 @@ class SovereignPortalApp {
           'Content-Type': mimeTypes[ext] || 'application/octet-stream',
           'X-Frame-Options': 'DENY',
           'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
         });
         res.end(content);
       });

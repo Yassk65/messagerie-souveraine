@@ -233,14 +233,50 @@ async function getOrCreateRoomMegolmKey(roomId) {
   return entry;
 }
 
+function uint8ArrayToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000; // 32 Ko par bloc pour éviter "Maximum call stack size exceeded" sur les photos et vocaux
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const sub = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, sub);
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8Array(base64Str) {
+  const bin = atob(base64Str);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function dataUrlToBlobUrl(dataUrl) {
+  try {
+    const commaIdx = dataUrl.indexOf(',');
+    if (commaIdx === -1) return null;
+    const header = dataUrl.slice(0, commaIdx);
+    const b64 = dataUrl.slice(commaIdx + 1);
+    const mimeMatch = header.match(/data:([^;]+)/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'audio/wav';
+    const bytes = base64ToUint8Array(b64);
+    const blob = new Blob([bytes], { type: mimeType });
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  }
+}
+
 async function encryptRoomPayload(roomId, plaintextObj) {
   const { key, sessionId } = await getOrCreateRoomMegolmKey(roomId);
   const iv = window.crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(JSON.stringify(plaintextObj));
   const cipherBuf = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
 
-  const cipherBase64 = btoa(String.fromCharCode(...new Uint8Array(cipherBuf)));
-  const ivBase64 = btoa(String.fromCharCode(...iv));
+  const cipherBase64 = uint8ArrayToBase64(new Uint8Array(cipherBuf));
+  const ivBase64 = uint8ArrayToBase64(iv);
 
   return {
     algorithm: 'm.megolm.v1.aes-sha2',
@@ -255,8 +291,8 @@ async function encryptRoomPayload(roomId, plaintextObj) {
 async function decryptRoomPayload(roomId, encryptedContent) {
   try {
     const { key } = await getOrCreateRoomMegolmKey(roomId);
-    const cipherBytes = Uint8Array.from(atob(encryptedContent.ciphertext), (c) => c.charCodeAt(0));
-    const ivBytes = Uint8Array.from(atob(encryptedContent.iv), (c) => c.charCodeAt(0));
+    const cipherBytes = base64ToUint8Array(encryptedContent.ciphertext);
+    const ivBytes = base64ToUint8Array(encryptedContent.iv);
     const plainBuf = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, key, cipherBytes);
     return JSON.parse(new TextDecoder().decode(plainBuf));
   } catch {
@@ -804,16 +840,13 @@ async function renderRoomMessages(roomId, forceScroll = false) {
 
         if (isImg && att.dataUrl) {
           contentHtml = `
-            <div class="encrypted-photo-box">
-              <img src="${att.dataUrl}" alt="${escapeHtml(att.name)}" class="encrypted-photo-img" title="Cliquez pour agrandir la photo déchiffrée" />
-              <div class="encrypted-photo-footer">
-                <span>🖼️ ${escapeHtml(att.name)} (${escapeHtml(att.sizeLabel)}) · Chiffré AES-256</span>
-                ${
-                  canDownload
-                    ? `<button type="button" class="btn-download-file download-att-btn">⬇ Télécharger</button>`
-                    : `<span style="color:#fda4af;font-weight:600;">🔒 Export bloqué (Confidentiel)</span>`
-                }
-              </div>
+            <div class="wa-photo-wrapper">
+              <img src="${att.dataUrl}" alt="${escapeHtml(att.name)}" class="wa-photo-img" title="Cliquez pour afficher en plein écran" />
+              ${
+                canDownload
+                  ? `<button type="button" class="wa-photo-dl-overlay download-att-btn" title="Télécharger la photo">⬇ ${escapeHtml(att.sizeLabel)}</button>`
+                  : ''
+              }
             </div>
             ${decrypted.text ? `<div class="bubble-text">${escapeHtml(decrypted.text)}</div>` : ''}
           `;
@@ -839,49 +872,42 @@ async function renderRoomMessages(roomId, forceScroll = false) {
         }
       }
 
-      // 2. Note vocale chiffrée (Lecteur audio HTML5 réel + Transcription langue nationale)
+      // 2. Note vocale chiffrée style WhatsApp (Bouton Play/Pause + Onde sonore animée + Durée)
       if (meta.is_voice) {
         const langLabels = { fr: 'Français', mos: 'Mooré', dyu: 'Dioula', ff: 'Fulfuldé' };
         const langName = langLabels[meta.lang] || (meta.lang || 'fr').toUpperCase();
-        const durLabel = decrypted.voiceDurationSec ? ` · ${decrypted.voiceDurationSec}s` : '';
+        const totalDur = Math.max(1, Number(decrypted.voiceDurationSec || 3));
+        const durFormatted = `0:${String(totalDur).padStart(2, '0')}`;
+        const barHeights = [35, 60, 45, 80, 95, 55, 70, 40, 85, 100, 65, 50, 75, 90, 45, 60, 80, 50, 70, 40, 65, 55, 40, 30];
+        const barsHtml = barHeights
+          .map((h, idx) => `<span class="wa-wave-bar" data-idx="${idx}" style="height:${h}%"></span>`)
+          .join('');
 
         contentHtml = `
-          <div class="voice-player">
-            <div class="voice-player-top">
-              <div style="font-size:0.8rem;font-weight:700;color:#0f172a;">
-                🎙️ Message vocal chiffré (${escapeHtml(langName)}${escapeHtml(durLabel)})
+          <div class="wa-voice-note">
+            <button type="button" class="wa-voice-play-btn" title="Écouter la note vocale">▶</button>
+            <div class="wa-voice-body">
+              <div class="wa-waveform">${barsHtml}</div>
+              <div class="wa-voice-meta">
+                <span class="wa-voice-timer">${escapeHtml(durFormatted)}</span>
+                <span>🎙️ Vocal · ${escapeHtml(langName)}</span>
               </div>
-              ${
-                decrypted.voiceSummary
-                  ? `<button type="button" class="btn-primary play-tts-btn" style="padding:0.2rem 0.5rem;font-size:0.7rem;">🔊 Voix synthèse</button>`
-                  : ''
-              }
             </div>
-            ${
-              decrypted.audioDataUrl
-                ? `<audio controls preload="metadata" src="${decrypted.audioDataUrl}" class="voice-audio-element"></audio>`
-                : ''
-            }
-            ${
-              decrypted.voiceSummary
-                ? `<div style="font-size:0.76rem;color:#475569;margin-top:0.1rem;">« ${escapeHtml(decrypted.voiceSummary)} »</div>`
-                : ''
-            }
           </div>
+          ${
+            decrypted.text && !decrypted.text.startsWith('Note vocale')
+              ? `<div class="bubble-text" style="margin-top:0.25rem;">${escapeHtml(decrypted.text)}</div>`
+              : ''
+          }
         `;
       }
 
-      // 3. Protection visuelle niveau CONFIDENTIEL (Floutage anti-capture d'écran + Filigrane au matricule du lecteur)
+      // 3. Filigrane de traçabilité pour le niveau CONFIDENTIEL (sans bloquer l'ouverture des images)
       if (classification === 'CONFIDENTIEL') {
         const readerWatermark = `${state.agent.fullName} · Matricule ${state.agent.matricule || state.agent.localpart}`;
         contentHtml = `
-          <div class="confidential-content-shield blurred">
-            <div class="confidential-reveal-hint" title="Cliquez ou survolez pour révéler le contenu confidentiel">
-              👁️ Contenu CONFIDENTIEL protégé contre les regards/captures — Cliquez ou survolez pour lire
-            </div>
-            <div class="shield-inner">
-              ${contentHtml}
-            </div>
+          <div>
+            ${contentHtml}
             <div class="confidential-watermark">🛡️ Filigrane de traçabilité : consulté par ${escapeHtml(readerWatermark)}</div>
           </div>
         `;
@@ -937,28 +963,21 @@ async function renderRoomMessages(roomId, forceScroll = false) {
         </div>
       `;
 
-      // Événements interactifs sur la bulle
-      const shield = bubble.querySelector('.confidential-content-shield');
-      if (shield) {
-        shield.addEventListener('mouseenter', () => shield.classList.remove('blurred'));
-        shield.addEventListener('mouseleave', () => shield.classList.add('blurred'));
-        shield.addEventListener('click', () => shield.classList.toggle('blurred'));
-      }
-
       const dlBtn = bubble.querySelector('.download-att-btn');
       if (dlBtn && decrypted.attachment) {
-        dlBtn.addEventListener('click', () => {
+        dlBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
           triggerDecryptedFileDownload(decrypted.attachment.dataUrl, decrypted.attachment.name);
         });
       }
 
-      const photoImg = bubble.querySelector('.encrypted-photo-img');
+      const photoImg = bubble.querySelector('.wa-photo-img');
       if (photoImg && decrypted.attachment?.dataUrl) {
         photoImg.addEventListener('click', () => {
           const w = window.open('', '_blank');
           if (w) {
             w.document.write(
-              `<html><head><title>${escapeHtml(decrypted.attachment.name)} — Photo déchiffrée E2EE</title></head><body style="margin:0;background:#0f172a;display:flex;align-items:center;justify-content:center;min-height:100vh;"><img src="${decrypted.attachment.dataUrl}" style="max-width:95vw;max-height:95vh;border-radius:8px;"/></body></html>`
+              `<html><head><title>${escapeHtml(decrypted.attachment.name)}</title></head><body style="margin:0;background:#0f172a;display:flex;align-items:center;justify-content:center;min-height:100vh;"><img src="${decrypted.attachment.dataUrl}" style="max-width:96vw;max-height:96vh;border-radius:8px;"/></body></html>`
             );
           }
         });
@@ -976,10 +995,60 @@ async function renderRoomMessages(roomId, forceScroll = false) {
         });
       }
 
-      const ttsBtn = bubble.querySelector('.play-tts-btn');
-      if (ttsBtn && decrypted.voiceSummary) {
-        ttsBtn.addEventListener('click', () => {
-          if ('speechSynthesis' in window) {
+      // Lecteur audio style WhatsApp (avec Blob URL + progression d'onde sonore)
+      const voicePlayBtn = bubble.querySelector('.wa-voice-play-btn');
+      if (voicePlayBtn) {
+        let audioObj = null;
+        let animTimer = null;
+        const bars = Array.from(bubble.querySelectorAll('.wa-wave-bar'));
+        const timerEl = bubble.querySelector('.wa-voice-timer');
+        const totalDur = Math.max(1, Number(decrypted.voiceDurationSec || 3));
+
+        const resetVisuals = () => {
+          voicePlayBtn.textContent = '▶';
+          bars.forEach((b) => b.classList.remove('active'));
+          if (timerEl) timerEl.textContent = `0:${String(totalDur).padStart(2, '0')}`;
+          if (animTimer) {
+            clearInterval(animTimer);
+            animTimer = null;
+          }
+        };
+
+        voicePlayBtn.addEventListener('click', async () => {
+          if (audioObj && !audioObj.paused) {
+            audioObj.pause();
+            audioObj.currentTime = 0;
+            resetVisuals();
+            return;
+          }
+
+          voicePlayBtn.textContent = '⏸';
+          const startTs = Date.now();
+          animTimer = setInterval(() => {
+            const elapsed = (Date.now() - startTs) / 1000;
+            const ratio = Math.min(1, elapsed / totalDur);
+            const activeCount = Math.ceil(ratio * bars.length);
+            bars.forEach((b, i) => b.classList.toggle('active', i < activeCount));
+            const curSec = Math.min(totalDur, Math.floor(elapsed));
+            if (timerEl) timerEl.textContent = `0:${String(curSec).padStart(2, '0')}`;
+            if (ratio >= 1) {
+              resetVisuals();
+            }
+          }, 100);
+
+          if (decrypted.audioDataUrl) {
+            const blobUrl = dataUrlToBlobUrl(decrypted.audioDataUrl) || decrypted.audioDataUrl;
+            audioObj = new Audio(blobUrl);
+            audioObj.onended = resetVisuals;
+            try {
+              await audioObj.play();
+              return;
+            } catch {
+              // Fallback synthèse vocale si le format audio du navigateur nécessite un secours
+            }
+          }
+
+          if ('speechSynthesis' in window && decrypted.voiceSummary) {
             window.speechSynthesis.cancel();
             const utter = new SpeechSynthesisUtterance(decrypted.voiceSummary);
             utter.lang = 'fr-FR';
@@ -1359,7 +1428,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('cancelAttachmentBtn').addEventListener('click', clearStagedAttachment);
 
-  // Sélection d'une photo ou d'un document à chiffrer de bout en bout
+  // Sélection d'une photo ou d'un document : envoi chiffré immédiat (images ouvertes comme sur WhatsApp)
   const fileBtn = document.getElementById('attachFileBtn');
   const fileInput = document.getElementById('fileAttachmentInput');
   fileBtn.addEventListener('click', () => fileInput.click());
@@ -1377,7 +1446,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const dataUrl = await readFileAsDataUrl(file);
     const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(file.name);
 
-    state.stagedAttachment = {
+    const attachmentObj = {
       name: file.name,
       sizeLabel,
       mimeType: file.type || 'application/octet-stream',
@@ -1385,26 +1454,97 @@ window.addEventListener('DOMContentLoaded', () => {
       dataUrl,
     };
 
-    const previewEl = document.getElementById('stagedAttachmentPreview');
-    const icon = getFileTypeIcon(file.name, file.type);
-    previewEl.innerHTML = `
-      ${
-        isImage
-          ? `<img src="${dataUrl}" class="staged-thumb" alt="Aperçu" />`
-          : `<span style="font-size:1.5rem;">${icon}</span>`
-      }
-      <div>
-        <div><strong>${escapeHtml(file.name)}</strong> (${escapeHtml(sizeLabel)})</div>
-        <div style="font-size:0.72rem;color:#047857;">🔒 Prêt à être chiffré de bout en bout (AES-256-GCM) — Cliquez sur « Envoyer »</div>
-      </div>
-    `;
-    document.getElementById('stagedAttachmentBar').classList.remove('hidden');
-    document.getElementById('messageInput').focus();
+    try {
+      await sendEncryptedMessageToRoom(state.activeRoomId, {
+        text: document.getElementById('messageInput').value.trim(),
+        classification: document.getElementById('classificationSelect').value,
+        ttlSec: Number(document.getElementById('ttlSelect').value || 0),
+        isInstruction: document.getElementById('isInstructionCheckbox').checked,
+        attachment: attachmentObj,
+      });
+      document.getElementById('messageInput').value = '';
+      clearStagedAttachment();
+      document.getElementById('isInstructionCheckbox').checked = false;
+      state.lastRenderSignature = '';
+      await renderRoomMessages(state.activeRoomId, true);
+    } catch (err) {
+      alert(err.message);
+    }
   });
 
-  // Envoi d'un message texte et/ou d'une pièce jointe (photo / document) chiffrée de bout en bout
+  // Fonction commune pour finaliser, chiffrer (AES-256-GCM) et envoyer l'enregistrement vocal en cours
+  const finishAndSendVoiceRecording = async () => {
+    if (!state.activeRoomId) return;
+    const recBar = document.getElementById('voiceRecorderBar');
+    if (recBar.classList.contains('hidden')) return;
+
+    const durationSec = Math.max(1, Math.round((Date.now() - state.voiceRecorder.startedAt) / 1000));
+    const phrases = {
+      fr: 'Note vocale enregistrée',
+      mos: 'Koɛɛga : Ne y zabr fãa, bɩ y ges sebrã tõnd sẽn tʋmã.',
+      dyu: 'Kumakan : Aw ni baara, aw ye sɛbɛn cilen lajɛ.',
+      ff: 'Daande : On jaaraama, ƴeewon dossier neldaaɗo oo.',
+    };
+    const customText = document.getElementById('messageInput').value.trim();
+    const voiceSummary = customText || phrases[state.lang] || phrases.fr;
+
+    let audioDataUrl = null;
+    if (!state.voiceRecorder.isFallbackMode && state.voiceRecorder.mediaRecorder) {
+      audioDataUrl = await new Promise((resolve) => {
+        const rec = state.voiceRecorder.mediaRecorder;
+        rec.onstop = async () => {
+          try {
+            if (state.voiceRecorder.chunks.length > 0) {
+              const blob = new Blob(state.voiceRecorder.chunks, { type: rec.mimeType || 'audio/webm' });
+              const dataUrl = await readFileAsDataUrl(blob);
+              resolve(dataUrl);
+            } else {
+              resolve(generateFallbackWavDataUrl(Math.min(durationSec, 5)));
+            }
+          } catch {
+            resolve(generateFallbackWavDataUrl(Math.min(durationSec, 5)));
+          }
+        };
+        if (rec.state !== 'inactive') {
+          rec.stop();
+        } else {
+          resolve(generateFallbackWavDataUrl(Math.min(durationSec, 5)));
+        }
+      });
+    } else {
+      audioDataUrl = generateFallbackWavDataUrl(Math.min(durationSec, 5));
+    }
+
+    stopVoiceRecorderStream();
+
+    try {
+      await sendEncryptedMessageToRoom(state.activeRoomId, {
+        text: customText,
+        voiceSummary,
+        audioDataUrl,
+        voiceDurationSec: durationSec,
+        isVoice: true,
+        classification: document.getElementById('classificationSelect').value,
+        ttlSec: Number(document.getElementById('ttlSelect').value || 0),
+        isInstruction: document.getElementById('isInstructionCheckbox').checked,
+      });
+      document.getElementById('messageInput').value = '';
+      state.lastRenderSignature = '';
+      await renderRoomMessages(state.activeRoomId, true);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  // Envoi d'un message texte (ou envoi du vocal si un enregistrement est en cours)
   document.getElementById('messageForm').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const recBar = document.getElementById('voiceRecorderBar');
+    if (!recBar.classList.contains('hidden')) {
+      await finishAndSendVoiceRecording();
+      return;
+    }
+
     const input = document.getElementById('messageInput');
     const text = input.value.trim();
     if ((!text && !state.stagedAttachment) || !state.activeRoomId) return;
@@ -1460,10 +1600,7 @@ window.addEventListener('DOMContentLoaded', () => {
       const sample = Math.sin(2 * Math.PI * freq * t) * env * 0.35;
       view.setInt16(44 + i * 2, sample * 32767, true);
     }
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    return 'data:audio/wav;base64,' + btoa(binary);
+    return 'data:audio/wav;base64,' + uint8ArrayToBase64(new Uint8Array(buffer));
   };
 
   const stopVoiceRecorderStream = () => {
@@ -1480,11 +1617,12 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('voiceRecorderBar').classList.add('hidden');
   };
 
-  // Clic sur le bouton Microphone 🎙️ : démarre l'enregistrement vocal en direct
+  // Clic sur le bouton Microphone 🎙️ : démarre l'enregistrement, ou l'envoie si on reclique dessus !
   document.getElementById('voiceNoteBtn').addEventListener('click', async () => {
     if (!state.activeRoomId) return;
     const recBar = document.getElementById('voiceRecorderBar');
     if (!recBar.classList.contains('hidden')) {
+      await finishAndSendVoiceRecording();
       return;
     }
 
@@ -1513,10 +1651,9 @@ window.addEventListener('DOMContentLoaded', () => {
       recorder.start();
       document.getElementById('voiceRecStatusText').textContent = '🎙️ Enregistrement micro en direct...';
     } catch {
-      // Si l'ordinateur n'a pas de micro branché ou permission refusée : mode enregistrement simulé sans blocage
       state.voiceRecorder.isFallbackMode = true;
       document.getElementById('voiceRecStatusText').textContent =
-        '🎙️ Enregistrement vocal (mode synthèse locale — aucun micro détecté)...';
+        '🎙️ Enregistrement vocal en cours...';
     }
 
     updateRecTimer();
@@ -1533,57 +1670,7 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   // Valider, chiffrer (AES-256-GCM) et envoyer le message vocal enregistré
-  document.getElementById('sendVoiceBtn').addEventListener('click', async () => {
-    if (!state.activeRoomId) return;
-    const durationSec = Math.max(1, Math.round((Date.now() - state.voiceRecorder.startedAt) / 1000));
-    const phrases = {
-      fr: 'Note vocale de service enregistrée et chiffrée de bout en bout.',
-      mos: 'Koɛɛga : Ne y zabr fãa, bɩ y ges sebrã tõnd sẽn tʋmã.',
-      dyu: 'Kumakan : Aw ni baara, aw ye sɛbɛn cilen lajɛ.',
-      ff: 'Daande : On jaaraama, ƴeewon dossier neldaaɗo oo.',
-    };
-    const customText = document.getElementById('messageInput').value.trim();
-    const voiceSummary = customText || phrases[state.lang] || phrases.fr;
-
-    let audioDataUrl = null;
-    if (!state.voiceRecorder.isFallbackMode && state.voiceRecorder.mediaRecorder) {
-      audioDataUrl = await new Promise((resolve) => {
-        const rec = state.voiceRecorder.mediaRecorder;
-        rec.onstop = async () => {
-          const blob = new Blob(state.voiceRecorder.chunks, { type: rec.mimeType || 'audio/webm' });
-          const dataUrl = await readFileAsDataUrl(blob);
-          resolve(dataUrl);
-        };
-        if (rec.state !== 'inactive') {
-          rec.stop();
-        } else {
-          resolve(generateFallbackWavDataUrl(Math.min(durationSec, 5)));
-        }
-      });
-    } else {
-      audioDataUrl = generateFallbackWavDataUrl(Math.min(durationSec, 5));
-    }
-
-    stopVoiceRecorderStream();
-
-    try {
-      await sendEncryptedMessageToRoom(state.activeRoomId, {
-        text: voiceSummary,
-        voiceSummary,
-        audioDataUrl,
-        voiceDurationSec: durationSec,
-        isVoice: true,
-        classification: document.getElementById('classificationSelect').value,
-        ttlSec: Number(document.getElementById('ttlSelect').value || 0),
-        isInstruction: document.getElementById('isInstructionCheckbox').checked,
-      });
-      document.getElementById('messageInput').value = '';
-      state.lastRenderSignature = '';
-      await renderRoomMessages(state.activeRoomId, true);
-    } catch (err) {
-      alert(err.message);
-    }
-  });
+  document.getElementById('sendVoiceBtn').addEventListener('click', finishAndSendVoiceRecording);
 
   // Nouveau canal
   document.getElementById('newRoomBtn').addEventListener('click', async () => {
