@@ -382,4 +382,59 @@ test('8. Sécurité Niveau NASA (DPoP RFC 9449 + Cookie HttpOnly + Anti-Rejeu) :
   assert.equal(replayAttempt.status, 401, 'Toute attaque par rejeu (même jti) doit être bloquée immédiatement');
 });
 
+test('9. Enrôlement Admin Zero-Knowledge : l’admin enregistre l’agent sans générer sa clé 2FA, l’agent la génère lui-même à sa 1ère connexion', async () => {
+  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf' });
+
+  // 1. Connexion de l'administrateur
+  const adm1 = await (
+    await app.dispatchTestRequest('POST', '/api/auth/login-step1', {
+      body: { username: 'admin', password: 'Demo-Fictif-2026!' },
+    })
+  ).json();
+  const adm2 = await (
+    await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
+      body: { challengeId: adm1.challengeId, totpCode: adm1.demoTotpHint },
+    })
+  ).json();
+
+  // 2. L'admin enregistre un nouvel agent (moussa.zongo)
+  const enrollRes = await app.dispatchTestRequest('POST', '/api/admin/enroll', {
+    headers: { Authorization: `Bearer ${adm2.portalToken}` },
+    body: {
+      localpart: 'moussa.zongo',
+      fullName: 'Moussa Zongo',
+      ministry: 'MTDPCE',
+      role: 'AGENT_PUBLIC',
+      password: 'Demo-Fictif-2026!',
+    },
+  });
+  assert.equal(enrollRes.status, 201);
+  const enrollData = await enrollRes.json();
+
+  // Vérifie que l'admin n'a reçu ni généré aucune clé 2FA
+  assert.equal(enrollData.totpSecret, undefined, 'Aucune clé 2FA ne doit être retournée à l’administrateur');
+  assert.equal(enrollData.agent.totpSecret, undefined, 'Aucune clé 2FA ne doit figurer dans l’objet agent retourné');
+  assert.equal(app.directory.get('moussa.zongo').totpSecret, null, 'La clé 2FA doit rester null tant que l’agent ne s’est pas connecté');
+
+  // 3. L'agent Moussa Zongo effectue sa toute première connexion : sa clé et son QR Code sont générés à cet instant
+  const m1 = await (
+    await app.dispatchTestRequest('POST', '/api/auth/login-step1', {
+      body: { username: 'moussa.zongo', password: 'Demo-Fictif-2026!' },
+    })
+  ).json();
+  assert.equal(m1.isFirstSetup, true);
+  assert.ok(m1.qrSvg && m1.qrSvg.includes('<svg'), 'Le QR Code FreeOTP est généré pour l’agent à sa 1ère connexion');
+  assert.ok(app.directory.get('moussa.zongo').totpSecret, 'La clé 2FA est maintenant générée par l’agent');
+
+  // Validation du 1er code OTP par l'agent -> scelle définitivement le QR Code
+  const m2 = await (
+    await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
+      body: { challengeId: m1.challengeId, totpCode: m1.demoTotpHint },
+    })
+  ).json();
+  assert.equal(m2.status, 'AUTHENTICATED');
+  assert.equal(app.directory.get('moussa.zongo').totpEnrolled, true);
+});
+
+
 

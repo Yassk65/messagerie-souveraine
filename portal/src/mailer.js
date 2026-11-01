@@ -122,3 +122,4 @@ class SovereignEmail2FAService {
 }
 
 module.exports = { SovereignEmail2FAService };
+

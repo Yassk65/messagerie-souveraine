@@ -269,3 +269,4 @@ function generateQrSvg(text, margin = 3) {
 }
 
 module.exports = { generateQrSvg };
+

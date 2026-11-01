@@ -1236,8 +1236,8 @@ window.addEventListener('DOMContentLoaded', () => {
       });
       box.className = 'alert success';
       box.innerHTML = `
-        <div>✅ Compte créé pour <strong>${escapeHtml(res.agent.fullName)}</strong>.</div>
-        <div style="font-size:0.78rem;margin-top:0.25rem;">Lors de sa première connexion, son QR Code FreeOTP unique lui sera présenté puis scellé définitivement.</div>
+        <div>✅ Agent <strong>${escapeHtml(res.agent.fullName)}</strong> enregistré dans l'annuaire souverain.</div>
+        <div style="font-size:0.78rem;margin-top:0.25rem;">Aucune clé 2FA n'a été générée par l'administration. L'agent générera lui-même sa clé sur son téléphone (FreeOTP) lors de sa toute première connexion.</div>
       `;
       box.classList.remove('hidden');
       await loadAdminAndAudit();

@@ -79,3 +79,4 @@ Nous étendons le couple éprouvé **Synapse / Element** par une couche métier 
 | **Membre 1** *(Chef de projet & Sécurité)* | Architecture Matrix & Cryptographie | Configuration Synapse (`homeserver.yaml`), chiffrement Olm/Megolm & WebCrypto (`app.js`), script `check_server_blind.sh`, Note de sécurité. |
 | **Membre 2** *(Backend & Identité)* | Authentification 2FA, RBAC & Révocation | Implémentation TOTP RFC 6238 (`totp.js`), RBAC (`roles.js`), révocation immédiate (`revoke.sh`, `matrix_engine.js`), tests automatisés (`security.test.js`). |
 | **Membre 3** *(Frontend & Innovations)* | Expérience Utilisateur & Métier État | Interface multilingue FR/Mooré/Dioula/Fulfuldé, classification et expiration, accusés de lecture signés (`receipts.js`), vidéo de démonstration. |
+

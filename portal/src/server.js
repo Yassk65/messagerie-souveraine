@@ -291,7 +291,12 @@ class SovereignPortalApp {
             role: agent.role,
             roleLabel: ROLES[agent.role]?.label || agent.role,
             status: agent.status,
-            currentTotpDemo: agent.status === 'ACTIVE' ? generateTOTP(agent.totpSecret) : 'RÉVOQUÉ',
+            currentTotpDemo:
+              agent.status !== 'ACTIVE'
+                ? 'RÉVOQUÉ'
+                : agent.totpSecret
+                  ? generateTOTP(agent.totpSecret)
+                  : 'À générer à la 1ère connexion',
           });
         }
         return sendJson(200, {
@@ -363,6 +368,12 @@ class SovereignPortalApp {
           identifier: { type: 'm.id.user', user: cleanLocal },
           password,
         });
+
+        // Si l'agent se connecte pour la toute première fois, il génère lui-même sa clé 2FA maintenant
+        // (l'administrateur n'y a jamais eu accès lors de l'inscription)
+        if (!agent.totpSecret) {
+          agent.totpSecret = generateBase32Secret(20);
+        }
 
         // Génère le code TOTP RFC 6238 hors-ligne (FreeOTP)
         const totpCodeNow = generateTOTP(agent.totpSecret);
@@ -871,13 +882,14 @@ class SovereignPortalApp {
 
         const role = ROLES[body.role] ? body.role : 'AGENT_PUBLIC';
         const ministry = body.ministry || 'MTDPCE';
-        const totpSecret = generateBase32Secret(20);
         const email =
           String(body.email || '').trim().toLowerCase() ||
           `${cleanLocal}@${ministry.toLowerCase()}.gov.bf`;
 
         this.matrix.registerUser(cleanLocal, password, role === 'ADMIN_SG', ministry);
 
+        // Principe Zero-Knowledge Admin : l'admin enregistre uniquement l'identité de l'agent.
+        // La clé 2FA (totpSecret) reste à null et ne sera générée que par l'agent lui-même lors de sa 1ère connexion !
         const newAgent = {
           localpart: cleanLocal,
           userId: `@${cleanLocal}:${this.serverName}`,
@@ -888,7 +900,7 @@ class SovereignPortalApp {
           direction: body.direction || 'Direction Générale',
           title: body.title || 'Agent Public',
           role,
-          totpSecret,
+          totpSecret: null,
           totpEnrolled: false,
           status: 'ACTIVE',
           enrolledAt: new Date().toISOString(),
@@ -898,14 +910,19 @@ class SovereignPortalApp {
         this.logAudit(
           'AGENT_ENROLLED',
           session.localpart,
-          `Enrôlement de ${newAgent.userId} (${newAgent.matricule}) avec rôle ${role}`
+          `Enregistrement de ${newAgent.userId} (${newAgent.matricule}) — Clé 2FA différée à la 1ère connexion de l'agent`
         );
 
-        const otpAuthUri = buildOtpAuthUri(cleanLocal, totpSecret);
         return sendJson(201, {
-          agent: newAgent,
-          otpAuthUri,
-          qrSvg: generateQrSvg(otpAuthUri),
+          agent: {
+            localpart: newAgent.localpart,
+            userId: newAgent.userId,
+            fullName: newAgent.fullName,
+            matricule: newAgent.matricule,
+            ministry: newAgent.ministry,
+            role: newAgent.role,
+            status: newAgent.status,
+          },
         });
       }
 

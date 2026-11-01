@@ -161,3 +161,4 @@ module.exports = {
   DPoPGuard,
   createNodeDPoPClientIdentity,
 };
+
