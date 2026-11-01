@@ -1,0 +1,11 @@
+{
+  "name": "faso-souverain-portal",
+  "version": "1.0.0",
+  "description": "Portail Souverain (2FA TOTP, RBAC, Révocation immédiate, E2EE Matrix) pour l'administration publique du Burkina Faso",
+  "license": "AGPL-3.0-only",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test ../tests/security.test.js"
+  }
+}

@@ -21,7 +21,7 @@ services:
 
   # Génère homeserver.yaml, config Element, secrets et clé de signature (une seule fois)
   init:
-    image: ghcr.io/element-hq/synapse:latest   # à épingler sur une version précise avant le dépôt
+    image: ghcr.io/element-hq/synapse:v1.118.0
     restart: "no"
     entrypoint: ["/bin/sh", "/init.sh"]
     environment:
@@ -35,7 +35,7 @@ services:
       - ./data/element:/element
 
   synapse:
-    image: ghcr.io/element-hq/synapse:latest   # à épingler
+    image: ghcr.io/element-hq/synapse:v1.118.0
     restart: unless-stopped
     depends_on:
       db:
@@ -50,7 +50,7 @@ services:
       - "8008:8008"
 
   element:
-    image: vectorim/element-web:latest          # à épingler
+    image: vectorim/element-web:v1.11.86
     restart: unless-stopped
     depends_on:
       init:
@@ -59,6 +59,20 @@ services:
       - ./data/element/config.json:/app/config.json:ro
     ports:
       - "8080:80"
+
+  # Portail & Client Souverain Burkinabè (2FA TOTP, RBAC, Révocation, Classification, Mooré/Dioula/Fulfuldé)
+  portal:
+    build: ./portal
+    restart: unless-stopped
+    depends_on:
+      - synapse
+    environment:
+      PORTAL_PORT: 3000
+      SERVER_NAME: ${SERVER_NAME:-localhost}
+      SYNAPSE_INTERNAL_URL: http://synapse:8008
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-Demo-Fictif-2026!}
+    ports:
+      - "3000:3000"
 
 volumes:
   pgdata:
