@@ -399,6 +399,22 @@ class SovereignPortalApp {
         return sendJson(201, created);
       }
 
+      // 8b. Démarrer ou rejoindre une discussion directe chiffrée (1:1) avec un agent de l'annuaire
+      if (pathname === '/api/rooms/direct' && req.method === 'POST') {
+        const body = await readBody();
+        const targetLocal = String(body.targetLocalpart || '').trim().toLowerCase();
+        const targetAgent = this.directory.get(targetLocal);
+        if (!targetAgent || targetAgent.status !== 'ACTIVE') {
+          return sendJson(404, { error: 'NOT_FOUND', message: 'Agent introuvable ou inactif.' });
+        }
+        const dm = this.matrix.getOrCreateDirectRoom(
+          session.userId,
+          targetLocal,
+          `${targetAgent.fullName} (${targetAgent.ministry})`
+        );
+        return sendJson(200, dm);
+      }
+
       // 9. Lecture des évènements chiffrés d'un salon
       if (pathname.startsWith('/api/rooms/') && pathname.endsWith('/events') && req.method === 'GET') {
         const roomId = decodeURIComponent(pathname.slice('/api/rooms/'.length, -'/events'.length));

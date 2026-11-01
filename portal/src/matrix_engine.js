@@ -43,27 +43,30 @@ class EmbeddedMatrixEngine {
       });
     }
 
-    // Création des canaux institutionnels chiffrés par défaut
+    // Création des canaux institutionnels et discussions directes chiffrés par défaut
     const defaultRooms = [
       {
         roomId: `!canal-interministeriel:${this.serverName}`,
-        name: 'Canal Officiel — Coordination Interministérielle',
-        topic: 'Échanges chiffrés de bout en bout (Megolm) — Tous ministères',
+        name: 'Coordination Interministérielle',
+        topic: 'Canal officiel des Ministères & Secrétariat Général',
         ministry: 'ALL',
+        isDirect: false,
         members: demoUsers.map((u) => `@${u.localpart}:${this.serverName}`),
       },
       {
         roomId: `!canal-mtdpce-dgtd:${this.serverName}`,
-        name: 'MTDPCE / DGTD — Direction Générale',
-        topic: 'Instructions de service et projets souverains',
+        name: 'Direction Générale (DGTD)',
+        topic: 'Équipe Transformation Digitale & Infrastructures',
         ministry: 'MTDPCE',
+        isDirect: false,
         members: [`@admin:${this.serverName}`, `@aminata.ouedraogo:${this.serverName}`],
       },
       {
         roomId: `!canal-cellule-crise:${this.serverName}`,
-        name: 'MATDS / Sécurité — Cellule de Veille Territoriale',
-        topic: 'Communications à Diffusion Restreinte et Confidentiel État',
+        name: 'Veille & Opérations Territoriales',
+        topic: 'Coordination opérationnelle inter-services',
         ministry: 'MATDS',
+        isDirect: false,
         members: [
           `@admin:${this.serverName}`,
           `@aminata.ouedraogo:${this.serverName}`,
@@ -79,6 +82,7 @@ class EmbeddedMatrixEngine {
         name: r.name,
         topic: r.topic,
         ministry: r.ministry,
+        isDirect: Boolean(r.isDirect),
         encryption: 'm.megolm.v1.aes-sha2',
         members: new Set(r.members),
         events: [
@@ -260,6 +264,7 @@ class EmbeddedMatrixEngine {
           expires_at: content.faso_meta?.expires_at || null,
           is_instruction: Boolean(content.faso_meta?.is_instruction),
           is_voice: Boolean(content.faso_meta?.is_voice),
+          has_attachment: Boolean(content.faso_meta?.has_attachment),
           lang: content.faso_meta?.lang || 'fr',
         },
       },
@@ -285,6 +290,7 @@ class EmbeddedMatrixEngine {
           name: room.name,
           topic: room.topic,
           ministry: room.ministry,
+          isDirect: Boolean(room.isDirect),
           encryption: room.encryption,
           members: Array.from(room.members),
           event_count: room.events.length,
@@ -292,6 +298,49 @@ class EmbeddedMatrixEngine {
       }
     }
     return result;
+  }
+
+  getOrCreateDirectRoom(userIdA, targetLocalpart, targetFullName) {
+    const cleanTarget = String(targetLocalpart).replace(/^@/, '').split(':')[0].toLowerCase();
+    const userIdB = `@${cleanTarget}:${this.serverName}`;
+    if (!this.users.has(userIdB) || this.users.get(userIdB).deactivated) {
+      const err = new Error('Agent destinataire introuvable ou inactif');
+      err.status = 404;
+      throw err;
+    }
+
+    for (const room of this.rooms.values()) {
+      if (
+        room.isDirect &&
+        room.members.size === 2 &&
+        room.members.has(userIdA) &&
+        room.members.has(userIdB)
+      ) {
+        return { room_id: room.roomId, existing: true };
+      }
+    }
+
+    const roomId = `!dm-${crypto.randomBytes(5).toString('hex')}:${this.serverName}`;
+    const room = {
+      roomId,
+      name: targetFullName || cleanTarget,
+      topic: 'Conversation privée chiffrée de bout en bout (Olm)',
+      ministry: 'DIRECT',
+      isDirect: true,
+      encryption: 'm.olm.v1.curve25519-aes-sha2',
+      members: new Set([userIdA, userIdB]),
+      events: [
+        {
+          event_id: `$enc_init_${crypto.randomBytes(6).toString('hex')}`,
+          type: 'm.room.encryption',
+          sender: userIdA,
+          origin_server_ts: Date.now(),
+          content: { algorithm: 'm.olm.v1.curve25519-aes-sha2' },
+        },
+      ],
+    };
+    this.rooms.set(roomId, room);
+    return { room_id: roomId, existing: false };
   }
 
   getRoomEvents(userId, roomId) {
@@ -384,3 +433,4 @@ class EmbeddedMatrixEngine {
 }
 
 module.exports = { EmbeddedMatrixEngine };
+

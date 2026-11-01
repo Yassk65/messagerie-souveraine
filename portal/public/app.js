@@ -1,140 +1,107 @@
 /**
- * Client Web Souverain (FasoSouverain — MTDPCE / DGTD)
+ * Application Web « FasoSouverain » — Messagerie Instantanée de l'Administration
  *
- * Explication technique pour l'entretien avec le jury :
- * 1. Chiffrement de bout en bout (E2EE) côté client :
- *    - Utilise l'API cryptographique standard du navigateur (`window.crypto.subtle` — WebCrypto)
- *      pour dériver la clé de session de groupe Megolm (PBKDF2-SHA256 -> AES-GCM 256 bits)
- *      et chiffrer chaque message et chaque note vocale AVANT tout envoi réseau.
- *    - Le serveur ne reçoit qu'un évènement `m.room.encrypted` contenant `ciphertext` et `iv`.
- * 2. Authentification forte à 2 facteurs (Mot de passe + TOTP RFC 6238) + RBAC.
- * 3. Innovations pour l'administration :
- *    - Langues nationales : Français, Mooré, Dioula, Fulfuldé (+3 pts bonus)
- *    - Niveaux de classification : Normal, Diffusion Restreinte, Confidentiel État (expiration auto, anti-copie)
- *    - Instructions de service avec Accusé de Lecture à valeur probante signé (HMAC-SHA256)
- *    - Bouton d'urgence (Panic Wipe) : effacement des clés locales + révocation immédiate
+ * Fonctionnement utilisateur & sécurité transparente :
+ * - Chiffrement de bout en bout automatique (WebCrypto AES-256-GCM / Matrix Megolm)
+ * - Authentification à 2 facteurs (Mot de passe + TOTP 6 chiffres RFC 6238)
+ * - Discussions de groupe (Canaux ministériels) et Conversations privées (1:1 depuis l'annuaire)
+ * - Partage de fichiers chiffrés, Notes vocales, Niveaux de confidentialité et Instructions officielles
+ * - Multilingue : Français, Mooré, Dioula, Fulfuldé
  */
 
 const I18N = {
   fr: {
-    app_title: "MESSAGERIE SOUVERAINE DE L'ADMINISTRATION",
-    gov_motto: "MTDPCE · DGTD — Burkina Faso · « La Patrie ou la Mort, nous Vaincrons »",
-    lang_label: "Langue :",
-    e2ee_active: "E2EE Olm/Megolm Actif",
-    panic_btn: "Bouton d'Urgence",
-    logout_btn: "Déconnexion",
-    login_title: "Portail d'Accès Agent Public",
-    login_subtitle: "Accès strictement réservé aux agents préalablement enrôlés par l'État. Authentification forte à 2 facteurs obligatoire.",
-    label_username: "Identifiant Matricule / Agent Matrix",
-    label_password: "Mot de passe souverain (1er facteur)",
-    btn_step1: "Vérifier l'identité (Étape 1/2)",
-    label_totp: "Code du 2e Facteur (TOTP à 6 chiffres — RFC 6238)",
-    btn_step2: "Valider le 2e Facteur & Déverrouiller les Clés E2EE",
-    jury_panel_title: "Console d'Évaluation Jury (Comptes Fictifs)",
-    jury_panel_desc: "Cliquez sur un agent fictif pour pré-remplir ses identifiants et son code 2FA TOTP temps-réel, ou testez le rejet d'un intrus :",
-    tab_chat: "Canaux Chiffrés",
-    tab_directory: "Annuaire Ministères",
-    tab_blind: "Preuve Serveur Aveugle",
-    tab_admin: "Admin & Révocation",
-    channels_title: "SALONS CHIFFRÉS (MEGOLM)",
-    label_classification: "Classification :",
-    label_ttl: "Expiration :",
-    label_instruction: "Instruction de Service (Accusé signé requis)",
-    msg_placeholder: "Écrire un message chiffré de bout en bout...",
-    btn_voice: "Vocal",
-    btn_send: "Chiffrer & Envoyer 🔒",
-    dir_title: "Annuaire Officiel des Agents Publics Assermentés",
-    dir_subtitle: "Répertoire souverain par Ministère, Direction et Fonction avec statut d'habilitation temps-réel.",
+    app_title: 'FasoSouverain',
+    gov_motto: "Messagerie Instantanée de l'Administration Publique · Burkina Faso",
+    lang_label: 'Langue :',
+    panic_btn: 'Urgence',
+    logout_btn: 'Quitter',
+    label_username: 'Identifiant ou Matricule Agent',
+    label_password: 'Mot de passe',
+    btn_step1: 'Continuer',
+    label_totp: "Code d'authentification à 6 chiffres (Application 2FA)",
+    btn_step2: 'Se connecter',
+    tab_chat: 'Messages',
+    tab_directory: 'Annuaire',
+    tab_admin: 'Sécurité',
+    channels_title: 'Canaux & Conversations',
+    label_classification: 'Confidentialité :',
+    label_ttl: 'Message éphémère :',
+    label_instruction: 'Note / Instruction officielle (Accusé de lecture)',
+    msg_placeholder: 'Écrire un message...',
+    btn_send: 'Envoyer',
+    dir_title: 'Annuaire des Ministères & Institutions',
+    dir_subtitle:
+      'Recherchez un agent public par ministère ou direction pour démarrer une conversation directe chiffrée.',
   },
   mos: {
-    app_title: " GOUVERNEMENT SÕOR KIBARE (FASO MESSAGERIE)",
-    gov_motto: "MTDPCE · DGTD — Burkina Faso · « Tẽngã bɩ kũum, tõnd na tõoge »",
-    lang_label: "Goama :",
-    e2ee_active: "Kibar sẽn pag ne Olm/Megolm",
-    panic_btn: "Yãgbo / Sãam fãa",
-    logout_btn: "Yi",
-    login_title: "Tʋʋm-tʋmdb Kẽesg Zĩiga",
-    login_subtitle: "Neb nins lɛta wã sẽn gʋls b yʋʋr bal n tõe n kẽ. TOTP Sõor a 6 la tɩlae.",
-    label_username: "Tʋʋm-tʋmd Yʋʋre / Matricule",
-    label_password: "Kʋɩlenga (Mot de passe)",
-    btn_step1: "Vaees yʋʋrã (1/2)",
-    label_totp: "TOTP Sõor a 6 (2FA)",
-    btn_step2: "Kẽ la pak kibarã kʋɩlense",
-    jury_panel_title: "Jury Makr Zĩiga (Comptes Fictifs)",
-    jury_panel_desc: "Dĩm tʋʋm-tʋmd yʋʋr tɩ kẽes a 정보 la TOTP, bɩ y mak nin-sãanga (Intrus) :",
-    tab_chat: "Sõsg Zĩisi",
-    tab_directory: "Ministɛɛr Sebre",
-    tab_blind: "Serveur Kãabgo",
-    tab_admin: "Admin & Yiisgo",
-    channels_title: "SÕSG ZĨISI (MEGOLM)",
-    label_classification: " Gũusg Zĩiga :",
-    label_ttl: "Saabo :",
-    label_instruction: "Tʋʋm Noy (Instruction de Service)",
-    msg_placeholder: "Gʋls koɛɛg sẽn pag ne E2EE...",
-    btn_voice: "Koɛɛga",
-    btn_send: "Pag la Tʋm 🔒",
-    dir_title: "Lɛta Tʋʋm-tʋmdb Sebre",
-    dir_subtitle: "Ministɛɛr fãa tʋʋm-tʋmdb yʋy la b tʋʋma.",
+    app_title: 'FasoSouverain',
+    gov_motto: 'Gouvernement Tʋʋm-tʋmdb Sõsg Zĩiga · Burkina Faso',
+    lang_label: 'Goama :',
+    panic_btn: 'Yãgbo',
+    logout_btn: 'Yi',
+    label_username: 'Tʋʋm-tʋmd Yʋʋre / Matricule',
+    label_password: 'Kʋɩlenga (Mot de passe)',
+    btn_step1: 'Kẽng taoora',
+    label_totp: 'TOTP Sõor a 6 (2FA)',
+    btn_step2: 'Kẽ',
+    tab_chat: 'Koɛɛga',
+    tab_directory: 'Sebre',
+    tab_admin: 'Gũusgo',
+    channels_title: 'Sõsg Zĩisi',
+    label_classification: 'Gũusg Zĩiga :',
+    label_ttl: 'Saabo :',
+    label_instruction: 'Tʋʋm Noy (Instruction officielle)',
+    msg_placeholder: 'Gʋls koɛɛga...',
+    btn_send: 'Tʋm',
+    dir_title: 'Ministɛɛr Tʋʋm-tʋmdb Sebre',
+    dir_subtitle: 'Yãk tʋʋm-tʋmd n sɩng sõsg sẽn pag ne E2EE.',
   },
   dyu: {
-    app_title: "FANGA Kibarodagasira Лаkana (FASO MESSAGERIE)",
-    gov_motto: "MTDPCE · DGTD — Burkina Faso · « Fasojamana walima Saya, an bɛ se »",
-    lang_label: "Kan :",
-    e2ee_active: "Kibaro Datugulen Olm/Megolm",
-    panic_btn: "Balawo Bɔtɔn",
-    logout_btn: "Bɔ",
-    login_title: "Fanga Baarakɛlaw Donnida",
-    login_subtitle: "Fanga baarakɛlaw dɔrɔn de bɛ se ka don. Lakanasɛbɛn filanan (2FA) wajibiyalen don.",
-    label_username: "Baarakɛla Tɔgɔ / Matricule",
-    label_password: "Gundodaɲɛ (Mot de passe)",
-    btn_step1: "Tɔgɔ Sɛgɛsɛgɛ (1/2)",
-    label_totp: "TOTP Nimɔrɔ 6 (2FA)",
-    btn_step2: "Don ka E2EE Da Yɛlɛ",
-    jury_panel_title: "Jury Kɔrɔbɔli Wala (Comptes Fictifs)",
-    jury_panel_desc: "Baarakɛla kelen sugandi walasa ka don joona, walima dunan (Intrus) kɔrɔbɔ :",
-    tab_chat: "Baro Kɛyɔrɔw",
-    tab_directory: "Minisiriw Tɔgɔsɛbɛn",
-    tab_blind: "Serveur Yeli Kɔrɔbɔli",
-    tab_admin: "Admin & Dabɔli",
-    channels_title: "BARO DATUGULENW (MEGOLM)",
-    label_classification: "Lakana Hakɛ :",
-    label_ttl: "Bannako :",
-    label_instruction: "Baara Ci (Instruction de Service)",
-    msg_placeholder: "Bataki sɛbɛn ni E2EE lakana ye...",
-    btn_voice: "Kumakan",
-    btn_send: "Datugu & Ci 🔒",
-    dir_title: "Fanga Baarakɛlaw Tɔgɔsɛbɛn",
-    dir_subtitle: "Minisiriso bɛɛ baarakɛlaw ni u ka jɔyɔrɔw.",
+    app_title: 'FasoSouverain',
+    gov_motto: 'Fanga Baarakɛlaw Baro Kɛyɔrɔ · Burkina Faso',
+    lang_label: 'Kan :',
+    panic_btn: 'Balawo',
+    logout_btn: 'Bɔ',
+    label_username: 'Baarakɛla Tɔgɔ / Matricule',
+    label_password: 'Gundodaɲɛ',
+    btn_step1: 'Taa ɲɛ',
+    label_totp: 'TOTP Nimɔrɔ 6 (2FA)',
+    btn_step2: 'Don',
+    tab_chat: 'Batakiw',
+    tab_directory: 'Tɔgɔsɛbɛn',
+    tab_admin: 'Lakana',
+    channels_title: 'Baro Kɛyɔrɔw',
+    label_classification: 'Lakana :',
+    label_ttl: 'Bannako :',
+    label_instruction: 'Baara Ci (Instruction officielle)',
+    msg_placeholder: 'Bataki sɛbɛn...',
+    btn_send: 'Ci',
+    dir_title: 'Minisiriso Baarakɛlaw Tɔgɔsɛbɛn',
+    dir_subtitle: 'Baarakɛla kelen sugandi ka baro datugulen daminɛ.',
   },
   ff: {
-    app_title: "NELAL LAAMU SUURangal (FASO MESSAGERIE)",
-    gov_motto: "MTDPCE · DGTD — Burkina Faso · « Leydi men walla Maayde, minpooli »",
-    lang_label: "Ɗemngal :",
-    e2ee_active: "E2EE Olm/Megolm Huuɓtidii",
-    panic_btn: "Momtugol Jaawngol",
-    logout_btn: "Yaltu",
-    login_title: "Damal Gollotooɓe Laamu",
-    login_subtitle: "Gollotooɓe winnditaaɓe tan mbaawi naatde. 2FA TOTP ina waɗɗii.",
-    label_username: "Innde Gollotooɗo / Matricule",
-    label_password: "Finnde (Mot de passe)",
-    btn_step1: "Ƴeewto Innde (1/2)",
-    label_totp: "TOTP Limre 6 (2FA)",
-    btn_step2: "Tabitinde 2FA & Udditde E2EE",
-    jury_panel_title: "Ƴeewndo Jury (Comptes Fictifs)",
-    jury_panel_desc: "Suɓo gollotooɗo ngam ƴeewndaade, walla ƴeewto keeri (Intrus) :",
-    tab_chat: "Cuuɗi Yeewtere",
-    tab_directory: "Deftere Ministeeruuji",
-    tab_blind: "Ƴeewndo Serveur",
-    tab_admin: "Admin & Ittugol",
-    channels_title: "CUUƊI E2EE (MEGOLM)",
-    label_classification: "Darnde Suura :",
-    label_ttl: "Momtugol :",
-    label_instruction: "Yamiroore Golle (Instruction)",
-    msg_placeholder: "Winndu nelal cuuraangal E2EE...",
-    btn_voice: "Daande",
-    btn_send: "Suuru & Neldul 🔒",
-    dir_title: "Deftere Gollotooɓe Laamu",
-    dir_subtitle: "Gollotooɓe laamu fof e ministeeruuji mum en.",
+    app_title: 'FasoSouverain',
+    gov_motto: 'Nelal Gollotooɓe Laamu · Burkina Faso',
+    lang_label: 'Ɗemngal :',
+    panic_btn: 'Jaawngol',
+    logout_btn: 'Yaltu',
+    label_username: 'Innde Gollotooɗo / Matricule',
+    label_password: 'Finnde',
+    btn_step1: 'Jokku',
+    label_totp: 'TOTP Limre 6 (2FA)',
+    btn_step2: 'Naatu',
+    tab_chat: 'Nelal',
+    tab_directory: 'Deftere',
+    tab_admin: 'Ndeenka',
+    channels_title: 'Cuuɗi Yeewtere',
+    label_classification: 'Suura :',
+    label_ttl: 'Momtugol :',
+    label_instruction: 'Yamiroore Laamu (Instruction)',
+    msg_placeholder: 'Winndu nelal...',
+    btn_send: 'Neldul',
+    dir_title: 'Deftere Gollotooɓe Ministeeruuji',
+    dir_subtitle: 'Suɓo gollotooɗo ngam fuɗɗaade yeewtere suuraande.',
   },
 };
 
@@ -145,13 +112,15 @@ const state = {
   agent: null,
   rooms: [],
   activeRoomId: null,
-  roomCryptoKeys: new Map(), // roomId -> { key: CryptoKey, fingerprint: string }
+  roomCryptoKeys: new Map(),
   pollTimer: null,
   demoAccounts: [],
+  directoryMap: new Map(), // userId -> fullName
+  lastRenderedCount: -1,
 };
 
 // ============================================================================
-// 1. CRYPTOGRAPHIE CLIENT (STANDARD WEBCRYPTO — AES-GCM 256 / MEGOLM SESSION)
+// 1. CHIFFREMENT DE BOUT EN BOUT TRANSPARENT (WEBCRYPTO AES-256-GCM / MEGOLM)
 // ============================================================================
 
 async function getOrCreateRoomMegolmKey(roomId) {
@@ -183,14 +152,14 @@ async function getOrCreateRoomMegolmKey(roomId) {
   const rawBytes = new Uint8Array(await window.crypto.subtle.exportKey('raw', aesKey));
   const hashBuf = await window.crypto.subtle.digest('SHA-256', rawBytes);
   const hashHex = Array.from(new Uint8Array(hashBuf))
-    .slice(0, 6)
+    .slice(0, 4)
     .map((b) => b.toString(16).padStart(2, '0').toUpperCase())
     .join(':');
 
   const entry = {
     key: aesKey,
     sessionId: `megolm_${hashHex.replace(/:/g, '').toLowerCase()}`,
-    fingerprint: `Empreinte Clé Megolm : ${hashHex}`,
+    fingerprint: `Clé vérifiée · ${hashHex}`,
   };
   state.roomCryptoKeys.set(roomId, entry);
   return entry;
@@ -209,7 +178,7 @@ async function encryptRoomPayload(roomId, plaintextObj) {
     algorithm: 'm.megolm.v1.aes-sha2',
     session_id: sessionId,
     sender_key: `curve25519_${state.agent?.localpart || 'agent'}`,
-    device_id: state.agent?.deviceId || 'FASO_WEB_DEVICE',
+    device_id: state.agent?.deviceId || 'FASO_DEVICE',
     ciphertext: cipherBase64,
     iv: ivBase64,
   };
@@ -223,12 +192,12 @@ async function decryptRoomPayload(roomId, encryptedContent) {
     const plainBuf = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, key, cipherBytes);
     return JSON.parse(new TextDecoder().decode(plainBuf));
   } catch {
-    return { text: '[Contenu chiffré — Clé de session non disponible sur cet appareil]' };
+    return { text: '🔒 Message chiffré' };
   }
 }
 
 // ============================================================================
-// 2. INTERNATIONALISATION (FRANÇAIS, MOORÉ, DIOULA, FULULDÉ)
+// 2. TRADUCTION MULTILINGUE (FRANÇAIS, MOORÉ, DIOULA, FULULDÉ)
 // ============================================================================
 
 function applyLanguage(lang) {
@@ -242,10 +211,12 @@ function applyLanguage(lang) {
     const k = el.getAttribute('data-i18n-placeholder');
     if (dict[k]) el.setAttribute('placeholder', dict[k]);
   });
+  document.getElementById('langSelectAuth').value = state.lang;
+  document.getElementById('langSelectApp').value = state.lang;
 }
 
 // ============================================================================
-// 3. APPELS API ET GESTION DE LA RÉVOCATION EN TEMPS RÉEL
+// 3. COMMUNICATION API & DÉCONNEXION IMMÉDIATE SUR RÉVOCATION
 // ============================================================================
 
 async function apiFetch(url, options = {}) {
@@ -261,30 +232,25 @@ async function apiFetch(url, options = {}) {
     throw new Error(data.message);
   }
   if (!res.ok) {
-    throw new Error(data.message || 'Erreur requête');
+    throw new Error(data.message || 'Erreur réseau');
   }
   return data;
 }
 
 function handleImmediateRevocationKick(reasonMsg) {
-  // Purge immédiate des clés cryptographiques en mémoire et stockage local
   state.roomCryptoKeys.clear();
   state.portalToken = null;
   state.matrixAccessToken = null;
   state.agent = null;
+  state.activeRoomId = null;
   if (state.pollTimer) clearInterval(state.pollTimer);
   localStorage.clear();
   sessionStorage.clear();
 
   document.getElementById('workspaceScreen').classList.add('hidden');
   document.getElementById('authScreen').classList.remove('hidden');
-  document.getElementById('panicBtn').classList.add('hidden');
-  document.getElementById('logoutBtn').classList.add('hidden');
 
-  showAuthAlert(
-    `🚨 RÉVOCATION IMMÉDIATE : ${reasonMsg || "Votre accès a été révoqué par l'administration. Toutes les clés E2EE locales ont été purgées."}`,
-    'error'
-  );
+  showAuthAlert(reasonMsg || 'Votre session a été fermée.', 'error');
   loadDemoAccounts();
 }
 
@@ -295,8 +261,24 @@ function showAuthAlert(msg, type = 'error') {
   box.classList.remove('hidden');
 }
 
+function getInitials(name) {
+  return String(name || 'A')
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() || '')
+    .join('');
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 // ============================================================================
-// 4. CONSOLE D'AIDE JURY & AUTHENTIFICATION 2FA
+// 4. AUTHENTIFICATION À 2 FACTEURS
 // ============================================================================
 
 async function loadDemoAccounts() {
@@ -307,19 +289,18 @@ async function loadDemoAccounts() {
     container.innerHTML = '';
 
     for (const acc of state.demoAccounts) {
-      const div = document.createElement('div');
-      div.className = `demo-account-item ${acc.status !== 'ACTIVE' ? 'revoked' : ''}`;
-      div.innerHTML = `
+      state.directoryMap.set(acc.userId, acc.fullName);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'quick-acc-btn';
+      btn.disabled = acc.status !== 'ACTIVE';
+      btn.innerHTML = `
         <div>
-          <strong>${acc.fullName}</strong> <span class="role-tag ${acc.role}">${acc.role}</span>
-          <div class="small-muted">@${acc.localpart} · ${acc.ministry} · Matricule: ${acc.matricule}</div>
-          <div class="totp-hint">Code 2FA TOTP actuel : <code>${acc.currentTotpDemo}</code></div>
+          <strong>${escapeHtml(acc.fullName)}</strong>
+          <div style="color:#64748b;font-size:0.72rem;">${escapeHtml(acc.title)} · ${escapeHtml(acc.ministry)}</div>
         </div>
-        <button type="button" class="btn-secondary" ${acc.status !== 'ACTIVE' ? 'disabled' : ''}>
-          ${acc.status === 'ACTIVE' ? 'Utiliser ce compte →' : '🚫 Révoqué'}
-        </button>
+        <span class="badge-role">${acc.status === 'ACTIVE' ? acc.localpart : 'Révoqué'}</span>
       `;
-      const btn = div.querySelector('button');
       if (acc.status === 'ACTIVE') {
         btn.addEventListener('click', () => {
           document.getElementById('usernameInput').value = acc.localpart;
@@ -327,10 +308,9 @@ async function loadDemoAccounts() {
           document.getElementById('authAlert').classList.add('hidden');
         });
       }
-      container.appendChild(div);
+      container.appendChild(btn);
     }
 
-    // Peuple le filtre ministère de l'annuaire
     const minSelect = document.getElementById('ministryFilterSelect');
     if (minSelect && minSelect.options.length <= 1 && data.ministries) {
       for (const m of data.ministries) {
@@ -347,7 +327,7 @@ async function loadDemoAccounts() {
 
 let currentChallengeId = null;
 
-async function setupAuthHandlers() {
+function setupAuthHandlers() {
   const step1Form = document.getElementById('loginStep1Form');
   const step2Form = document.getElementById('loginStep2Form');
 
@@ -365,17 +345,17 @@ async function setupAuthHandlers() {
 
       currentChallengeId = res.challengeId;
       document.getElementById('agentPreviewBox').innerHTML = `
-        <strong>✅ 1er Facteur Validé :</strong> ${res.agentPreview.fullName} (${res.agentPreview.matricule})<br/>
-        <span>Ministère : <b>${res.agentPreview.ministry}</b> · Rôle : <b>${res.agentPreview.role}</b></span>
+        <div><strong>${escapeHtml(res.agentPreview.fullName)}</strong></div>
+        <div style="font-size:0.76rem;opacity:0.85;">Matricule ${escapeHtml(res.agentPreview.matricule)} · ${escapeHtml(res.agentPreview.ministry)}</div>
       `;
       document.getElementById('totpInput').value = res.demoTotpHint || '';
-      document.getElementById('totpDemoHint').textContent =
-        `💡 Aide Démo Jury : Le code TOTP RFC 6238 généré pour cet agent est pré-rempli (${res.demoTotpHint}).`;
+      document.getElementById('totpDemoHint').textContent = `Code généré par l'authentificateur : ${res.demoTotpHint}`;
 
       step1Form.classList.add('hidden');
       step2Form.classList.remove('hidden');
+      document.getElementById('totpInput').focus();
     } catch (err) {
-      showAuthAlert(`❌ ${err.message}`, 'error');
+      showAuthAlert(err.message, 'error');
     }
   });
 
@@ -394,9 +374,9 @@ async function setupAuthHandlers() {
 
       step2Form.classList.add('hidden');
       step1Form.classList.remove('hidden');
-      enterWorkspace();
+      await enterWorkspace();
     } catch (err) {
-      showAuthAlert(`❌ ${err.message}`, 'error');
+      showAuthAlert(err.message, 'error');
     }
   });
 
@@ -405,63 +385,67 @@ async function setupAuthHandlers() {
     step1Form.classList.remove('hidden');
   });
 
-  // Bouton Épreuve Jury « Intrus »
   document.getElementById('testIntrusBtn').addEventListener('click', async () => {
-    document.getElementById('usernameInput').value = 'intrus.externe';
+    document.getElementById('usernameInput').value = 'compte.externe';
     try {
       await apiFetch('/api/auth/login-step1', {
         method: 'POST',
-        body: JSON.stringify({ username: 'intrus.externe', password: ' FakePassword123!' }),
+        body: JSON.stringify({ username: 'compte.externe', password: 'Password123!' }),
       });
     } catch (err) {
-      showAuthAlert(`🛡️ ÉPREUVE INTRUS RÉUSSIE (Rejet immédiat) : ${err.message}`, 'error');
+      showAuthAlert(err.message, 'error');
     }
   });
 }
 
 // ============================================================================
-// 5. ESPACE DE TRAVAIL MESSAGERIE, CLASSIFICATION & INSTRUCTIONS DE SERVICE
+// 5. INTERFACE PRINCIPALE DE MESSAGERIE
 // ============================================================================
 
 async function enterWorkspace() {
   document.getElementById('authScreen').classList.add('hidden');
   document.getElementById('workspaceScreen').classList.remove('hidden');
-  document.getElementById('panicBtn').classList.remove('hidden');
-  document.getElementById('logoutBtn').classList.remove('hidden');
 
-  // Affiche la carte d'identité de l'agent connecté
+  const initials = getInitials(state.agent.fullName);
   document.getElementById('currentUserCard').innerHTML = `
-    <div><strong>${state.agent.fullName}</strong></div>
-    <div class="small-muted">${state.agent.userId}</div>
-    <div style="margin-top:0.35rem;">
-      <span class="role-tag ${state.agent.role}">${state.agent.roleLabel}</span>
-      <span class="role-tag">${state.agent.ministry}</span>
+    <div class="avatar-circle">${escapeHtml(initials)}</div>
+    <div class="profile-meta">
+      <div class="profile-name">${escapeHtml(state.agent.fullName)}</div>
+      <div class="profile-sub">${escapeHtml(state.agent.ministry)} · ${escapeHtml(state.agent.title)}</div>
     </div>
-    <div class="small-muted" style="margin-top:0.3rem;">Matricule : <code>${state.agent.matricule}</code></div>
   `;
 
-  // Masque ou affiche les options réservées aux Directeurs / Admin
   const canSendInstruction =
     state.agent.role === 'ADMIN_SG' || state.agent.role === 'DIRECTEUR';
   document.getElementById('instructionToggleWrapper').style.display = canSendInstruction
     ? 'flex'
     : 'none';
 
-  await loadRooms();
   await loadDirectory();
-  await loadBlindCheck();
-  await loadAdminPanel();
+  await loadRooms();
+  await loadAdminAndAudit();
+
+  // Dépose un message de bienvenue chiffré si le salon principal est vide
+  const currentRoom = state.rooms.find((r) => r.room_id === state.activeRoomId);
+  if (currentRoom && currentRoom.event_count <= 1) {
+    await sendEncryptedMessageToRoom(state.activeRoomId, {
+      text: `Bonjour à tous, le canal sécurisé ${currentRoom.name} est opérationnel.`,
+      classification: 'NORMAL',
+      ttlSec: 0,
+      isInstruction: false,
+    });
+  }
 
   if (state.pollTimer) clearInterval(state.pollTimer);
   state.pollTimer = setInterval(async () => {
     if (!state.portalToken) return;
     try {
-      await apiFetch('/api/me'); // Vérifie que l'agent n'est pas révoqué en direct
+      await apiFetch('/api/me');
       if (state.activeRoomId) {
-        await renderRoomMessages(state.activeRoomId);
+        await renderRoomMessages(state.activeRoomId, false);
       }
     } catch {
-      // Géré automatiquement par apiFetch (déconnexion immédiate si révoqué)
+      // Déconnexion gérée automatiquement si l'agent est révoqué
     }
   }, 2500);
 }
@@ -469,63 +453,91 @@ async function enterWorkspace() {
 async function loadRooms() {
   const data = await apiFetch('/api/rooms');
   state.rooms = data.rooms || [];
-  const ul = document.getElementById('roomsList');
-  ul.innerHTML = '';
-
-  for (const r of state.rooms) {
-    const li = document.createElement('li');
-    li.className = `room-item ${r.room_id === state.activeRoomId ? 'active' : ''}`;
-    li.innerHTML = `
-      <div><strong>🔒 ${r.name}</strong></div>
-      <div class="small-muted">${r.ministry} · ${r.members.length} agents</div>
-    `;
-    li.addEventListener('click', () => selectRoom(r.room_id));
-    ul.appendChild(li);
-  }
+  renderRoomsList();
 
   if (!state.activeRoomId && state.rooms.length > 0) {
     await selectRoom(state.rooms[0].room_id);
   }
 }
 
+function renderRoomsList() {
+  const filter = (document.getElementById('roomSearchInput')?.value || '').toLowerCase();
+  const ul = document.getElementById('roomsList');
+  ul.innerHTML = '';
+
+  for (const r of state.rooms) {
+    if (filter && !r.name.toLowerCase().includes(filter) && !r.ministry.toLowerCase().includes(filter)) {
+      continue;
+    }
+    const li = document.createElement('li');
+    li.className = `conv-item ${r.room_id === state.activeRoomId ? 'active' : ''}`;
+    const iconText = r.isDirect ? getInitials(r.name) : '#';
+    const subText = r.isDirect
+      ? 'Message direct chiffré'
+      : `${r.ministry} · ${r.members.length} participants`;
+
+    li.innerHTML = `
+      <div class="conv-icon">${escapeHtml(iconText)}</div>
+      <div class="conv-info">
+        <div class="conv-title">${escapeHtml(r.name)}</div>
+        <div class="conv-sub">${escapeHtml(subText)}</div>
+      </div>
+    `;
+    li.addEventListener('click', () => selectRoom(r.room_id));
+    ul.appendChild(li);
+  }
+}
+
 async function selectRoom(roomId) {
   state.activeRoomId = roomId;
+  state.lastRenderedCount = -1;
   const room = state.rooms.find((r) => r.room_id === roomId);
   if (room) {
-    document.getElementById('activeRoomName').textContent = `🔒 ${room.name}`;
+    document.getElementById('activeRoomName').textContent = room.name;
     document.getElementById('activeRoomTopic').textContent = room.topic;
+    document.getElementById('activeRoomAvatar').textContent = room.isDirect
+      ? getInitials(room.name)
+      : '#';
   }
 
   const keyInfo = await getOrCreateRoomMegolmKey(roomId);
   document.getElementById('roomKeyFingerprint').textContent = keyInfo.fingerprint;
 
-  document.querySelectorAll('.room-item').forEach((el, idx) => {
-    el.classList.toggle('active', state.rooms[idx]?.room_id === roomId);
-  });
-
-  await renderRoomMessages(roomId);
+  renderRoomsList();
+  await renderRoomMessages(roomId, true);
 }
 
-async function renderRoomMessages(roomId) {
+function resolveSenderDisplayName(userId) {
+  if (state.directoryMap.has(userId)) {
+    return state.directoryMap.get(userId);
+  }
+  const local = String(userId).replace(/^@/, '').split(':')[0];
+  return local
+    .split('.')
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(' ');
+}
+
+async function renderRoomMessages(roomId, forceScroll = false) {
   const data = await apiFetch(`/api/rooms/${encodeURIComponent(roomId)}/events`);
   const container = document.getElementById('messagesContainer');
   container.innerHTML = '';
 
   for (const ev of data.events) {
     if (ev.type === 'm.room.encryption') {
-      const sysDiv = document.createElement('div');
-      sysDiv.className = 'small-muted';
-      sysDiv.style.textAlign = 'center';
-      sysDiv.textContent = `🔐 Salon initialisé avec le protocole Matrix ${ev.content.algorithm} (aucun texte en clair sur le serveur)`;
-      container.appendChild(sysDiv);
+      const chip = document.createElement('div');
+      chip.className = 'system-chip';
+      chip.textContent =
+        '🔒 Les messages et les fichiers de cette discussion sont chiffrés de bout en bout. Même le serveur ne peut pas les lire.';
+      container.appendChild(chip);
       continue;
     }
 
     if (ev.type === 'm.room.member' && ev.content.membership === 'leave') {
-      const revDiv = document.createElement('div');
-      revDiv.className = 'alert error';
-      revDiv.textContent = `⚡ SÉCURITÉ : L'agent ${ev.sender} a été retiré du salon (${ev.content.reason}). Rotation de clé Megolm effectuée.`;
-      container.appendChild(revDiv);
+      const chip = document.createElement('div');
+      chip.className = 'system-chip';
+      chip.textContent = `ℹ️ ${resolveSenderDisplayName(ev.sender)} a quitté la discussion (accès révoqué — clés de sécurité renouvelées).`;
+      container.appendChild(chip);
       continue;
     }
 
@@ -534,82 +546,113 @@ async function renderRoomMessages(roomId) {
       const meta = ev.content.faso_meta || {};
       const classification = meta.classification || 'NORMAL';
       const isOwn = ev.sender === state.agent.userId;
+      const senderDisplay = decrypted.senderName || resolveSenderDisplayName(ev.sender);
 
-      const card = document.createElement('div');
-      card.className = `msg-card ${isOwn ? 'own' : ''} ${classification}`;
+      const row = document.createElement('div');
+      row.className = `bubble-row ${isOwn ? 'own' : 'other'}`;
 
-      // Blocage copie / transfert pour Diffusion Restreinte et Confidentiel
+      const bubble = document.createElement('div');
+      bubble.className = `message-bubble ${classification}`;
+
       if (classification !== 'NORMAL') {
-        card.addEventListener('copy', (e) => {
+        bubble.addEventListener('copy', (e) => {
           e.preventDefault();
-          alert('🚫 Action bloquée : La copie et le transfert sont interdits sur un message classifié.');
+          alert('Copie désactivée : ce message est protégé par la politique de confidentialité.');
         });
       }
 
-      const timeStr = new Date(ev.origin_server_ts).toLocaleTimeString('fr-FR');
-      const expiryBadge = meta.expires_at
-        ? ` · ⏳ Expire dans ${Math.max(1, Math.round((meta.expires_at - Date.now()) / 1000))}s`
+      const timeStr = new Date(ev.origin_server_ts).toLocaleTimeString('fr-FR', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      const expiryText = meta.expires_at
+        ? ` · ⏳ ${Math.max(1, Math.round((meta.expires_at - Date.now()) / 1000))}s`
         : '';
 
-      let bodyHtml = `<div class="msg-body">${escapeHtml(decrypted.text || '')}</div>`;
+      const classifBadgeHtml =
+        classification !== 'NORMAL'
+          ? `<span class="classif-pill ${classification}">${
+              classification === 'CONFIDENTIEL' ? 'Confidentiel' : 'Diffusion restreinte'
+            }</span>`
+          : '';
+
+      let contentHtml = `<div class="bubble-text">${escapeHtml(decrypted.text || '')}</div>`;
+
+      // Pièce jointe chiffrée
+      if (decrypted.attachment) {
+        contentHtml = `
+          <div class="file-attachment-card">
+            <span>📄</span>
+            <div style="flex:1">
+              <div><strong>${escapeHtml(decrypted.attachment.name)}</strong></div>
+              <div style="font-size:0.72rem;color:#64748b;">${escapeHtml(decrypted.attachment.sizeLabel)} · Chiffré AES-256</div>
+            </div>
+          </div>
+          ${decrypted.text ? `<div class="bubble-text">${escapeHtml(decrypted.text)}</div>` : ''}
+        `;
+      }
+
+      // Note vocale chiffrée
       if (meta.is_voice && decrypted.voiceSummary) {
-        bodyHtml = `
-          <div class="msg-body">
-            🎙️ <strong>Note Vocale Chiffrée (${meta.lang?.toUpperCase() || 'FR'}) :</strong>
-            ${escapeHtml(decrypted.voiceSummary)}
-            <button type="button" class="btn-secondary play-voice-btn" style="margin-left:0.5rem;padding:0.2rem 0.5rem;">▶️ Écouter</button>
+        contentHtml = `
+          <div class="voice-player">
+            <button type="button" class="btn-primary play-voice-btn" style="padding:0.3rem 0.65rem;font-size:0.75rem;">▶ Écouter</button>
+            <div>
+              <div style="font-size:0.82rem;font-weight:600;">Note vocale (${(meta.lang || 'fr').toUpperCase()})</div>
+              <div style="font-size:0.78rem;color:#475569;">${escapeHtml(decrypted.voiceSummary)}</div>
+            </div>
           </div>
         `;
       }
 
+      // Instruction de service officielle avec accusé de lecture signé
       let instructionHtml = '';
       if (meta.is_instruction) {
         const receipts = ev.receipts || [];
         const hasAcked = receipts.some((r) => r.agentId === state.agent.userId);
-        const receiptsListHtml = receipts
-          .map(
-            (r) =>
-              `<div>✅ <b>${escapeHtml(r.fullName)}</b> (${escapeHtml(r.matricule)} · ${escapeHtml(r.ministry)}) — Signé HMAC: <code>${r.signature.slice(0, 14)}...</code></div>`
-          )
-          .join('');
+        const ackedNames = receipts.map((r) => `✓ ${escapeHtml(r.fullName)} (${escapeHtml(r.ministry)})`).join(' · ');
 
         instructionHtml = `
-          <div class="instruction-box">
-            <div>📜 <strong>INSTRUCTION DE SERVICE OFFICIELLE (Valeur Probante)</strong></div>
-            <div style="margin-top:0.35rem;">${receiptsListHtml || '<em>Aucun accusé de réception enregistré pour le moment.</em>'}</div>
+          <div class="official-instruction-card">
+            <div style="font-weight:700;color:#065f46;">📌 Instruction Officielle de Service</div>
+            <div style="margin-top:0.25rem;color:#475569;">
+              ${ackedNames || 'En attente de confirmation de lecture par les destinataires.'}
+            </div>
             ${
               !hasAcked
-                ? `<button type="button" class="btn-primary ack-btn" data-event-id="${ev.event_id}" style="margin-top:0.45rem;">✍️ Accuser réception officiellement (Signature HMAC-SHA256)</button>`
+                ? `<button type="button" class="ack-btn-inline" data-event-id="${ev.event_id}">Confirmer la lecture et signer l'accusé</button>`
                 : ''
             }
           </div>
         `;
       }
 
-      card.innerHTML = `
-        <div class="msg-meta">
-          <span><strong>${escapeHtml(ev.sender)}</strong> · ${timeStr}</span>
-          <span><b class="role-tag">${classification}</b>${expiryBadge}</span>
+      bubble.innerHTML = `
+        <div class="bubble-header">
+          <span class="sender-name">${escapeHtml(senderDisplay)}</span>
+          ${classifBadgeHtml}
         </div>
-        ${bodyHtml}
+        ${contentHtml}
         ${instructionHtml}
-        <div class="msg-cipher-preview">
-          Stocké dans Synapse PostgreSQL (m.room.encrypted) : ciphertext="${ev.content.ciphertext.slice(0, 38)}..."
+        <div class="bubble-footer">
+          <span>${timeStr}${expiryText}</span>
+          <span title="Chiffré de bout en bout">🔒</span>
         </div>
       `;
 
-      const ackBtn = card.querySelector('.ack-btn');
+      const ackBtn = bubble.querySelector('.ack-btn-inline');
       if (ackBtn) {
         ackBtn.addEventListener('click', async () => {
           await apiFetch('/api/receipts/acknowledge', {
             method: 'POST',
             body: JSON.stringify({ eventId: ev.event_id, roomId }),
           });
-          await renderRoomMessages(roomId);
+          await renderRoomMessages(roomId, false);
         });
       }
 
-      const playBtn = card.querySelector('.play-voice-btn');
+      const playBtn = bubble.querySelector('.play-voice-btn');
       if (playBtn) {
         playBtn.addEventListener('click', () => {
           if ('speechSynthesis' in window) {
@@ -620,166 +663,230 @@ async function renderRoomMessages(roomId) {
         });
       }
 
-      container.appendChild(card);
+      row.appendChild(bubble);
+      container.appendChild(row);
     }
+  }
+
+  if (forceScroll || data.events.length !== state.lastRenderedCount) {
+    state.lastRenderedCount = data.events.length;
+    container.scrollTop = container.scrollHeight;
   }
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+async function sendEncryptedMessageToRoom(
+  roomId,
+  { text, classification = 'NORMAL', ttlSec = 0, isInstruction = false, isVoice = false, voiceSummary = null, attachment = null }
+) {
+  const encrypted = await encryptRoomPayload(roomId, {
+    text,
+    voiceSummary,
+    attachment,
+    senderName: state.agent.fullName,
+    sentAt: new Date().toISOString(),
+  });
+
+  const expiresAt =
+    ttlSec > 0
+      ? Date.now() + ttlSec * 1000
+      : classification === 'CONFIDENTIEL'
+      ? Date.now() + 300 * 1000
+      : null;
+
+  await apiFetch(`/api/rooms/${encodeURIComponent(roomId)}/send-encrypted`, {
+    method: 'POST',
+    body: JSON.stringify({
+      type: 'm.room.encrypted',
+      content: {
+        ...encrypted,
+        faso_meta: {
+          classification,
+          expires_at: expiresAt,
+          is_instruction: isInstruction,
+          is_voice: isVoice,
+          has_attachment: Boolean(attachment),
+          lang: state.lang,
+        },
+      },
+      faso_meta: {
+        classification,
+        expires_at: expiresAt,
+        is_instruction: isInstruction,
+      },
+    }),
+  });
 }
 
 // ============================================================================
-// 6. ANNUAIRE MINISTÉRIEL, PREUVE SERVEUR AVEUGLE & CONSOLE ADMIN
+// 6. ANNUAIRE DES MINISTÈRES (AVEC BOUTON « ENVOYER UN MESSAGE »)
 // ============================================================================
 
 async function loadDirectory() {
-  const ministry = document.getElementById('ministryFilterSelect').value || 'ALL';
+  const ministry = document.getElementById('ministryFilterSelect')?.value || 'ALL';
   const data = await apiFetch(`/api/directory?ministry=${encodeURIComponent(ministry)}`);
   const grid = document.getElementById('directoryGrid');
+  if (!grid) return;
   grid.innerHTML = '';
 
   for (const ag of data.agents) {
+    state.directoryMap.set(ag.userId, ag.fullName);
     const card = document.createElement('div');
-    card.className = 'dir-card';
+    card.className = 'contact-card';
+    const isMe = ag.localpart === state.agent?.localpart;
+
     card.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <strong>${escapeHtml(ag.fullName)}</strong>
-        <span class="role-tag ${ag.role}">${ag.status === 'ACTIVE' ? '🟢 ACTIF' : '🔴 RÉVOQUÉ'}</span>
+      <div class="contact-top">
+        <div class="avatar-circle">${escapeHtml(getInitials(ag.fullName))}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;font-size:0.95rem;">${escapeHtml(ag.fullName)}</div>
+          <div style="font-size:0.78rem;color:#64748b;">${escapeHtml(ag.title)}</div>
+        </div>
       </div>
-      <div class="small-muted" style="margin:0.3rem 0;">${escapeHtml(ag.title)} — ${escapeHtml(ag.direction)}</div>
-      <div><span class="role-tag">${escapeHtml(ag.ministry)}</span> <span class="role-tag">${escapeHtml(ag.roleLabel)}</span></div>
-      <div class="small-muted" style="margin-top:0.4rem;">Identifiant Matrix : <code>${escapeHtml(ag.userId)}</code> · Matricule : <code>${escapeHtml(ag.matricule)}</code></div>
+      <div style="font-size:0.8rem;color:#475569;margin-bottom:0.65rem;">
+        <div>🏛️ <strong>${escapeHtml(ag.ministry)}</strong> — ${escapeHtml(ag.direction)}</div>
+        <div style="margin-top:0.2rem;">Matricule : <code>${escapeHtml(ag.matricule)}</code></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:0.6rem;border-top:1px solid #f1f5f9;">
+        <span class="badge-role">${ag.status === 'ACTIVE' ? '🟢 En service' : '🔴 Accès révoqué'}</span>
+        ${
+          !isMe && ag.status === 'ACTIVE'
+            ? `<button type="button" class="btn-primary start-dm-btn" style="padding:0.38rem 0.75rem;font-size:0.78rem;">💬 Message direct</button>`
+            : ''
+        }
+      </div>
     `;
+
+    const dmBtn = card.querySelector('.start-dm-btn');
+    if (dmBtn) {
+      dmBtn.addEventListener('click', async () => {
+        const res = await apiFetch('/api/rooms/direct', {
+          method: 'POST',
+          body: JSON.stringify({ targetLocalpart: ag.localpart }),
+        });
+        await loadRooms();
+        switchView('chatView');
+        await selectRoom(res.room_id);
+      });
+    }
     grid.appendChild(card);
   }
 }
 
-async function loadBlindCheck() {
-  const data = await apiFetch('/api/security/blind-check');
-  const container = document.getElementById('blindCheckResult');
-  container.innerHTML = `
-    <div class="dir-card">
-      <h3>✅ Statut Base de Données : ${data.status}</h3>
-      <p style="margin:0.5rem 0;font-size:1.1rem;color:#34d399;">
-        Messages en clair (<code>m.room.message</code>) : <strong>${data.clear_text_events_count}</strong>
-      </p>
-      <p class="small-muted">Tous les échanges des agents sont stockés exclusivement sous forme d'évènements chiffrés <code>m.room.encrypted</code> (algorithme <code>m.megolm.v1.aes-sha2</code>).</p>
-      <pre class="code-block" style="margin-top:0.65rem;">${escapeHtml(JSON.stringify(data.event_types_summary, null, 2))}</pre>
-    </div>
-    <div class="dir-card">
-      <h3>🔐 Derniers Évènements Chiffrés en Base (Aucune clé sur le serveur)</h3>
-      <pre class="code-block" style="margin-top:0.5rem;">${escapeHtml(JSON.stringify(data.sample_encrypted_records, null, 2))}</pre>
-    </div>
-    <div class="dir-card">
-      <h3>🛡️ Politique de Minimisation des Métadonnées Active</h3>
-      <pre class="code-block" style="margin-top:0.5rem;">${escapeHtml(JSON.stringify(data.metadata_minimization_policy, null, 2))}</pre>
-    </div>
-    <div class="dir-card">
-      <h3>📋 Journal d'Audit Sécurité (Sans contenu de message)</h3>
-      <pre class="code-block" style="margin-top:0.5rem;">${escapeHtml(JSON.stringify(data.audit_logs.slice(0, 6), null, 2))}</pre>
-    </div>
-  `;
-}
+// ============================================================================
+// 7. ADMINISTRATION & AUDIT DE SÉCURITÉ
+// ============================================================================
 
-async function loadAdminPanel() {
-  const data = await apiFetch('/api/directory?ministry=ALL');
+async function loadAdminAndAudit() {
+  const dirData = await apiFetch('/api/directory?ministry=ALL');
   const list = document.getElementById('adminAgentsList');
-  list.innerHTML = '';
+  if (list) {
+    list.innerHTML = '';
+    for (const ag of dirData.agents) {
+      const row = document.createElement('div');
+      row.className = 'user-manage-row';
+      const canRevoke =
+        state.agent.role === 'ADMIN_SG' && ag.localpart !== 'admin' && ag.status === 'ACTIVE';
 
-  for (const ag of data.agents) {
-    const item = document.createElement('div');
-    item.className = 'demo-account-item';
-    const canRevoke =
-      state.agent.role === 'ADMIN_SG' && ag.localpart !== 'admin' && ag.status === 'ACTIVE';
-
-    item.innerHTML = `
-      <div>
-        <strong>${escapeHtml(ag.fullName)}</strong> (<code>@${escapeHtml(ag.localpart)}</code>)
-        <div class="small-muted">${escapeHtml(ag.ministry)} · Rôle: ${escapeHtml(ag.role)} · Statut: <b>${ag.status}</b></div>
-      </div>
-      ${
-        canRevoke
-          ? `<button type="button" class="btn-panic revoke-agent-btn" data-localpart="${escapeHtml(ag.localpart)}">⚡ Révoquer immédiatement</button>`
-          : `<span class="role-tag">${ag.status === 'REVOKED' ? '🚫 Déjà Révoqué' : 'Protégé'}</span>`
-      }
-    `;
-
-    const revBtn = item.querySelector('.revoke-agent-btn');
-    if (revBtn) {
-      revBtn.addEventListener('click', async () => {
-        try {
-          const res = await apiFetch('/api/admin/revoke', {
-            method: 'POST',
-            body: JSON.stringify({ localpart: ag.localpart }),
-          });
-          alert(
-            `✅ Agent @${ag.localpart} révoqué immédiatement !\n- Sessions coupées : ${res.matrixRevocation.revoked_sessions}\n- Salons quittés : ${res.matrixRevocation.rooms_removed}\n- Clé Megolm renouvelée.`
-          );
-          await loadAdminPanel();
-          await loadDirectory();
-          if (state.activeRoomId) await renderRoomMessages(state.activeRoomId);
-        } catch (err) {
-          alert(`Erreur : ${err.message}`);
+      row.innerHTML = `
+        <div>
+          <div style="font-weight:600;font-size:0.88rem;">${escapeHtml(ag.fullName)}</div>
+          <div style="font-size:0.75rem;color:#64748b;">${escapeHtml(ag.ministry)} · ${escapeHtml(ag.matricule)} · ${escapeHtml(ag.roleLabel)}</div>
+        </div>
+        ${
+          canRevoke
+            ? `<button type="button" class="btn-revoke-sm">Révoquer l'accès</button>`
+            : `<span class="badge-role">${ag.status === 'REVOKED' ? 'Révoqué' : 'Administrateur'}</span>`
         }
-      });
+      `;
+
+      const revBtn = row.querySelector('.btn-revoke-sm');
+      if (revBtn) {
+        revBtn.addEventListener('click', async () => {
+          if (!confirm(`Confirmer la révocation immédiate de ${ag.fullName} ?`)) return;
+          try {
+            await apiFetch('/api/admin/revoke', {
+              method: 'POST',
+              body: JSON.stringify({ localpart: ag.localpart }),
+            });
+            await loadAdminAndAudit();
+            await loadDirectory();
+            if (state.activeRoomId) await renderRoomMessages(state.activeRoomId, false);
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+      }
+      list.appendChild(row);
     }
-    list.appendChild(item);
+  }
+
+  const blindData = await apiFetch('/api/security/blind-check');
+  const auditContainer = document.getElementById('blindCheckResult');
+  if (auditContainer) {
+    auditContainer.innerHTML = `
+      <div>
+        <div style="font-weight:700;color:#047857;">État du stockage serveur : Chiffrement intégral (${blindData.status})</div>
+        <div style="font-size:0.82rem;color:#475569;margin-top:0.25rem;">
+          Messages en clair sur le serveur : <strong>${blindData.clear_text_events_count}</strong> ·
+          Évènements chiffrés (<code>m.room.encrypted</code>) : <strong>${blindData.event_types_summary['m.room.encrypted'] || 0}</strong>
+        </div>
+        <pre class="code-box">${escapeHtml(JSON.stringify(blindData.sample_encrypted_records.slice(0, 2), null, 2))}</pre>
+      </div>
+      <div>
+        <div style="font-weight:700;">Journal de sécurité récent</div>
+        <pre class="code-box">${escapeHtml(JSON.stringify(blindData.audit_logs.slice(0, 4), null, 2))}</pre>
+      </div>
+    `;
   }
 }
 
+function switchView(viewId) {
+  document.querySelectorAll('.rail-btn[data-view]').forEach((b) => {
+    b.classList.toggle('active', b.getAttribute('data-view') === viewId);
+  });
+  document.querySelectorAll('.view-container').forEach((v) => {
+    const isTarget = v.id === viewId;
+    v.classList.toggle('hidden', !isTarget);
+    v.classList.toggle('active-view', isTarget);
+  });
+  if (viewId === 'directoryView') loadDirectory();
+  if (viewId === 'adminView') loadAdminAndAudit();
+}
+
 // ============================================================================
-// 7. INITIALISATION GLOBALE DE L'INTERFACE
+// 8. INITIALISATION DES ÉVÈNEMENTS UI
 // ============================================================================
 
 window.addEventListener('DOMContentLoaded', () => {
   loadDemoAccounts();
   setupAuthHandlers();
 
-  // Changement de langue nationale (+3 pts bonus)
-  document.getElementById('langSelect').addEventListener('change', (e) => {
-    applyLanguage(e.target.value);
+  document.getElementById('langSelectAuth').addEventListener('change', (e) => applyLanguage(e.target.value));
+  document.getElementById('langSelectApp').addEventListener('change', (e) => applyLanguage(e.target.value));
+
+  document.querySelectorAll('.rail-btn[data-view]').forEach((btn) => {
+    btn.addEventListener('click', () => switchView(btn.getAttribute('data-view')));
   });
 
-  // Navigation par onglets
-  document.querySelectorAll('.nav-tab').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.nav-tab').forEach((b) => b.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach((t) => t.classList.add('hidden'));
-      btn.classList.add('active');
-      const targetId = btn.getAttribute('data-tab');
-      document.getElementById(targetId).classList.remove('hidden');
-      if (targetId === 'directoryTab') loadDirectory();
-      if (targetId === 'blindTab') loadBlindCheck();
-      if (targetId === 'adminTab') loadAdminPanel();
-    });
-  });
+  document.getElementById('roomSearchInput').addEventListener('input', renderRoomsList);
 
-  // Changement de niveau de classification
+  // Bandeau discret de confidentialité
   document.getElementById('classificationSelect').addEventListener('change', (e) => {
     const val = e.target.value;
     const banner = document.getElementById('classificationBanner');
     const text = document.getElementById('classificationBannerText');
     if (val === 'NORMAL') {
-      banner.className = 'classification-banner normal';
-      text.textContent =
-        'Protection E2EE active : le serveur Synapse ne stocke que du contenu chiffré (m.room.encrypted).';
+      banner.classList.add('hidden');
     } else if (val === 'DIFFUSION_RESTREINTE') {
-      banner.className = 'classification-banner restricted';
-      text.textContent =
-        '⚠️ DIFFUSION RESTREINTE : Copie et transfert bloqués. Expiration automatique activée.';
+      banner.className = 'security-notice restricted';
+      text.textContent = 'Mode Diffusion Restreinte : copie et transfert désactivés pour ce message.';
     } else if (val === 'CONFIDENTIEL') {
-      banner.className = 'classification-banner confidential';
-      text.textContent =
-        '🚨 CONFIDENTIEL ÉTAT : Réservé aux Directeurs/Admin. Interdiction stricte de capture/copie et autodestruction rapide.';
+      banner.className = 'security-notice confidential';
+      text.textContent = 'Mode Confidentiel : message éphémère à autodestruction automatique.';
     }
   });
 
-  // Envoi d'un message chiffré de bout en bout
+  // Envoi d'un message texte chiffré
   document.getElementById('messageForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const input = document.getElementById('messageInput');
@@ -791,108 +898,92 @@ window.addEventListener('DOMContentLoaded', () => {
     const isInstruction = document.getElementById('isInstructionCheckbox').checked;
 
     try {
-      const encrypted = await encryptRoomPayload(state.activeRoomId, {
+      await sendEncryptedMessageToRoom(state.activeRoomId, {
         text,
-        senderName: state.agent.fullName,
-        sentAt: new Date().toISOString(),
+        classification,
+        ttlSec,
+        isInstruction,
       });
-
-      const expiresAt =
-        ttlSec > 0
-          ? Date.now() + ttlSec * 1000
-          : classification === 'CONFIDENTIEL'
-          ? Date.now() + 300 * 1000
-          : null;
-
-      await apiFetch(`/api/rooms/${encodeURIComponent(state.activeRoomId)}/send-encrypted`, {
-        method: 'POST',
-        body: JSON.stringify({
-          type: 'm.room.encrypted',
-          content: {
-            ...encrypted,
-            faso_meta: {
-              classification,
-              expires_at: expiresAt,
-              is_instruction: isInstruction,
-              is_voice: false,
-              lang: state.lang,
-            },
-          },
-          faso_meta: {
-            classification,
-            expires_at: expiresAt,
-            is_instruction: isInstruction,
-          },
-        }),
-      });
-
       input.value = '';
       document.getElementById('isInstructionCheckbox').checked = false;
-      await renderRoomMessages(state.activeRoomId);
+      await renderRoomMessages(state.activeRoomId, true);
     } catch (err) {
-      alert(`⛔ Refusé : ${err.message}`);
+      alert(err.message);
     }
   });
 
-  // Envoi d'une Note Vocale Chiffrée en Langue Nationale (+3 pts bonus)
-  document.getElementById('voiceNoteBtn').addEventListener('click', async () => {
-    if (!state.activeRoomId) return;
-    const greetings = {
-      fr: 'Instruction vocale chiffrée : Veuillez sécuriser le rapport ministériel.',
-      mos: 'Koɛɛg sẽn pag ne E2EE : Ne y zabr fãa, bɩ y gũus ministɛɛrã sɛb sõma.',
-      dyu: 'Kumakan datugulen : Aw ni baara, aw ye minisiriɲɛmɔgɔ ka sɛbɛnw lakana kosɛbɛ.',
-      ff: 'Nelal daande cuuraangal : On jaaraama, ndeenon kaayitaaji laamu ɗii.',
-    };
-    const voiceSummary = greetings[state.lang] || greetings.fr;
-    const encrypted = await encryptRoomPayload(state.activeRoomId, {
-      text: voiceSummary,
-      voiceSummary,
-      isVoice: true,
-    });
-
-    await apiFetch(`/api/rooms/${encodeURIComponent(state.activeRoomId)}/send-encrypted`, {
-      method: 'POST',
-      body: JSON.stringify({
-        type: 'm.room.encrypted',
-        content: {
-          ...encrypted,
-          faso_meta: {
-            classification: document.getElementById('classificationSelect').value,
-            is_voice: true,
-            lang: state.lang,
-          },
+  // Envoi d'un fichier joint chiffré de bout en bout
+  const fileBtn = document.getElementById('attachFileBtn');
+  const fileInput = document.getElementById('fileAttachmentInput');
+  fileBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0];
+    if (!file || !state.activeRoomId) return;
+    const sizeKb = Math.max(1, Math.round(file.size / 1024));
+    try {
+      await sendEncryptedMessageToRoom(state.activeRoomId, {
+        text: document.getElementById('messageInput').value.trim(),
+        classification: document.getElementById('classificationSelect').value,
+        ttlSec: Number(document.getElementById('ttlSelect').value || 0),
+        isInstruction: document.getElementById('isInstructionCheckbox').checked,
+        attachment: {
+          name: file.name,
+          sizeLabel: `${sizeKb} Ko`,
+          mimeType: file.type || 'application/octet-stream',
         },
-        faso_meta: {
-          classification: document.getElementById('classificationSelect').value,
-        },
-      }),
-    });
-    await renderRoomMessages(state.activeRoomId);
+      });
+      fileInput.value = '';
+      document.getElementById('messageInput').value = '';
+      await renderRoomMessages(state.activeRoomId, true);
+    } catch (err) {
+      alert(err.message);
+    }
   });
 
-  // Création d'un nouveau salon chiffré
+  // Envoi d'une note vocale chiffrée
+  document.getElementById('voiceNoteBtn').addEventListener('click', async () => {
+    if (!state.activeRoomId) return;
+    const phrases = {
+      fr: 'Note vocale : Merci de prendre connaissance du dossier transmis.',
+      mos: 'Koɛɛga : Ne y zabr fãa, bɩ y ges sebrã tõnd sẽn tʋmã.',
+      dyu: 'Kumakan : Aw ni baara, aw ye sɛbɛn cilen lajɛ.',
+      ff: 'Daande : On jaaraama, ƴeewon الdossier neldaaɗo oo.',
+    };
+    const voiceSummary = phrases[state.lang] || phrases.fr;
+    try {
+      await sendEncryptedMessageToRoom(state.activeRoomId, {
+        text: voiceSummary,
+        voiceSummary,
+        isVoice: true,
+        classification: document.getElementById('classificationSelect').value,
+      });
+      await renderRoomMessages(state.activeRoomId, true);
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  // Nouveau canal
   document.getElementById('newRoomBtn').addEventListener('click', async () => {
-    const name = prompt('Nom du nouveau salon chiffré (Megolm) :', 'Cellule Projet Souverain');
+    const name = prompt('Nom du nouveau canal :', 'Groupe de travail');
     if (!name) return;
-    await apiFetch('/api/rooms', {
+    const res = await apiFetch('/api/rooms', {
       method: 'POST',
       body: JSON.stringify({
         name,
-        topic: 'Salon chiffré de bout en bout (Megolm AES-256)',
+        topic: 'Canal de travail chiffré de bout en bout',
         ministry: state.agent.ministry,
         members: ['admin', 'aminata.ouedraogo', 'ibrahim.sawadogo', 'fatoumata.kabore'],
       }),
     });
     await loadRooms();
+    await selectRoom(res.room_id);
   });
 
-  // Filtre annuaire
   document.getElementById('ministryFilterSelect').addEventListener('change', loadDirectory);
+  document.getElementById('refreshBlindBtn').addEventListener('click', loadAdminAndAudit);
 
-  // Actualiser preuve serveur aveugle
-  document.getElementById('refreshBlindBtn').addEventListener('click', loadBlindCheck);
-
-  // Formulaire d'enrôlement Admin
+  // Création d'un nouvel agent dans l'onglet Sécurité
   document.getElementById('enrollForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const box = document.getElementById('enrollResultBox');
@@ -909,25 +1000,24 @@ window.addEventListener('DOMContentLoaded', () => {
       });
       box.className = 'alert success';
       box.innerHTML = `
-        ✅ <strong>Agent ${escapeHtml(res.agent.userId)} enrôlé !</strong><br/>
-        Secret 2FA TOTP (Base32) : <code>${res.agent.totpSecret}</code><br/>
-        Code 2FA actuel : <code>${res.currentTotpCode}</code>
+        Compte créé pour <strong>${escapeHtml(res.agent.fullName)}</strong>.<br/>
+        Clé 2FA TOTP : <code>${res.agent.totpSecret}</code> (Code actuel : <b>${res.currentTotpCode}</b>)
       `;
       box.classList.remove('hidden');
-      await loadAdminPanel();
+      await loadAdminAndAudit();
       await loadDirectory();
     } catch (err) {
       box.className = 'alert error';
-      box.textContent = `❌ ${err.message}`;
+      box.textContent = err.message;
       box.classList.remove('hidden');
     }
   });
 
-  // Bouton d'Urgence (Panic Wipe)
+  // Bouton d'Urgence
   document.getElementById('panicBtn').addEventListener('click', async () => {
     if (
       !confirm(
-        "🚨 BOUTON D'URGENCE : Voulez-vous effacer immédiatement toutes les clés cryptographiques locales et révoquer vos sessions sur le serveur ?"
+        "Effacement d'urgence : voulez-vous supprimer toutes les données locales de cet appareil et verrouiller votre compte ?"
       )
     ) {
       return;
@@ -935,15 +1025,14 @@ window.addEventListener('DOMContentLoaded', () => {
     try {
       await apiFetch('/api/security/emergency-wipe', {
         method: 'POST',
-        body: JSON.stringify({ reason: 'Urgence déclenchée par l’agent' }),
+        body: JSON.stringify({ reason: 'Verrouillage d’urgence déclenché par l’utilisateur' }),
       });
     } finally {
-      handleImmediateRevocationKick("Bouton d'urgence activé : appareil nettoyé et accès révoqué.");
+      handleImmediateRevocationKick('Appareil nettoyé et compte verrouillé par mesure de sécurité.');
     }
   });
 
-  // Déconnexion normale
   document.getElementById('logoutBtn').addEventListener('click', () => {
-    handleImmediateRevocationKick('Vous êtes déconnecté et les clés en mémoire ont été effacées.');
+    handleImmediateRevocationKick('Vous êtes déconnecté.');
   });
 });

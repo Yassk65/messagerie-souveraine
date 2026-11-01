@@ -3,278 +3,334 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FasoSouverain — Messagerie Souveraine de l'Administration (Burkina Faso)</title>
+  <title>FasoSouverain — Messagerie Officielle de l'Administration</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <!-- Bandeau supérieur Officiel Burkina Faso -->
-  <header class="gov-header">
-    <div class="gov-brand">
-      <div class="bf-flag" title="Burkina Faso">
-        <span class="flag-red"></span>
-        <span class="flag-green"></span>
-        <span class="flag-star">★</span>
-      </div>
-      <div>
-        <div class="gov-title" data-i18n="app_title">MESSAGERIE SOUVERAINE DE L'ADMINISTRATION</div>
-        <div class="gov-subtitle" data-i18n="gov_motto">MTDPCE · DGTD — Burkina Faso · « La Patrie ou la Mort, nous Vaincrons »</div>
-      </div>
-    </div>
-
-    <div class="gov-controls">
-      <!-- Sélecteur de Langues Nationales (+3 pts Bonus) -->
-      <div class="lang-selector">
-        <label for="langSelect" data-i18n="lang_label">Langue :</label>
-        <select id="langSelect" aria-label="Langue de l'interface">
-          <option value="fr">🇫🇷 Français (Officiel)</option>
-          <option value="mos">🇧🇫 Mooré (Langue nationale)</option>
-          <option value="dyu">🇧🇫 Dioula / Julakan (Langue nationale)</option>
-          <option value="ff">🇧🇫 Fulfuldé (Langue nationale)</option>
-        </select>
-      </div>
-
-      <!-- Indicateur E2EE -->
-      <span class="e2ee-pill" title="Protocole Matrix Olm/Megolm + WebCrypto AES-256-GCM">
-        🔒 <span data-i18n="e2ee_active">E2EE Olm/Megolm Actif</span>
-      </span>
-
-      <!-- Bouton d'Urgence (Panic Wipe) visible une fois connecté -->
-      <button id="panicBtn" class="btn-panic hidden" title="Effacement d'urgence de l'appareil et révocation">
-        🚨 <span data-i18n="panic_btn">Bouton d'Urgence</span>
-      </button>
-
-      <button id="logoutBtn" class="btn-secondary hidden" data-i18n="logout_btn">Déconnexion</button>
-    </div>
-  </header>
-
-  <!-- ÉCRAN 1 : AUTHENTIFICATION FORTE (ENRÔLEMENT VÉRIFIÉ + 2FA TOTP) -->
-  <main id="authScreen" class="auth-container">
-    <div class="auth-card">
-      <div class="auth-header">
-        <h1 data-i18n="login_title">Portail d'Accès Agent Public</h1>
-        <p data-i18n="login_subtitle">Accès strictement réservé aux agents préalablement enrôlés par l'État. Authentification forte à 2 facteurs obligatoire.</p>
+  <!-- ===================================================================== -->
+  <!-- ÉCRAN 1 : PORTAIL DE CONNEXION AGENT PUBLIC (CLEAN & PROFESSIONNEL)   -->
+  <!-- ===================================================================== -->
+  <div id="authScreen" class="auth-page">
+    <div class="auth-box">
+      <div class="auth-brand">
+        <div class="bf-emblem">
+          <span class="flag-r"></span>
+          <span class="flag-g"></span>
+          <span class="flag-star">★</span>
+        </div>
+        <div>
+          <h1 data-i18n="app_title">FasoSouverain</h1>
+          <p class="auth-sub" data-i18n="gov_motto">Messagerie Instantanée de l'Administration Publique · Burkina Faso</p>
+        </div>
       </div>
 
       <div id="authAlert" class="alert hidden"></div>
 
       <!-- Étape 1 : Identifiant + Mot de passe -->
       <form id="loginStep1Form" class="auth-form">
-        <div class="form-group">
-          <label for="usernameInput" data-i18n="label_username">Identifiant Matricule / Agent Matrix</label>
-          <input type="text" id="usernameInput" placeholder="ex: aminata.ouedraogo" required autocomplete="username" />
+        <div class="field">
+          <label for="usernameInput" data-i18n="label_username">Identifiant ou Matricule Agent</label>
+          <input type="text" id="usernameInput" placeholder="prenom.nom" required autocomplete="username" />
         </div>
-        <div class="form-group">
-          <label for="passwordInput" data-i18n="label_password">Mot de passe souverain (1er facteur)</label>
-          <input type="password" id="passwordInput" value="Demo-Fictif-2026!" required autocomplete="current-password" />
+        <div class="field">
+          <label for="passwordInput" data-i18n="label_password">Mot de passe</label>
+          <input type="password" id="passwordInput" placeholder="••••••••••••" required autocomplete="current-password" />
         </div>
-        <button type="submit" class="btn-primary full-width" data-i18n="btn_step1">Vérifier l'identité (Étape 1/2)</button>
+        <button type="submit" class="btn-primary btn-block" data-i18n="btn_step1">Continuer</button>
       </form>
 
-      <!-- Étape 2 : Second Facteur TOTP -->
+      <!-- Étape 2 : Double authentification 2FA TOTP -->
       <form id="loginStep2Form" class="auth-form hidden">
-        <div class="agent-preview-box" id="agentPreviewBox"></div>
-        <div class="form-group">
-          <label for="totpInput" data-i18n="label_totp">Code du 2e Facteur (TOTP à 6 chiffres — RFC 6238)</label>
-          <input type="text" id="totpInput" maxlength="6" pattern="\d{6}" placeholder="000000" required />
-          <small id="totpDemoHint" class="totp-hint"></small>
+        <div id="agentPreviewBox" class="user-Verify-pill"></div>
+        <div class="field">
+          <label for="totpInput" data-i18n="label_totp">Code d'authentification à 6 chiffres (Application 2FA)</label>
+          <input
+            type="text"
+            id="totpInput"
+            class="totp-code-input"
+            maxlength="6"
+            pattern="\d{6}"
+            placeholder="000 000"
+            required
+          />
+          <small id="totpDemoHint" class="helper-note"></small>
         </div>
-        <div class="form-actions">
-          <button type="button" id="backToStep1Btn" class="btn-secondary">← Retour</button>
-          <button type="submit" class="btn-primary" data-i18n="btn_step2">Valider le 2e Facteur & Déverrouiller les Clés E2EE</button>
+        <div class="row-actions">
+          <button type="button" id="backToStep1Btn" class="btn-ghost">Retour</button>
+          <button type="submit" class="btn-primary" style="flex:1" data-i18n="btn_step2">Se connecter</button>
         </div>
       </form>
-    </div>
 
-    <!-- Panneau d'aide pour le Jury (Comptes fictifs & Test d'intrus en 1 clic) -->
-    <aside class="jury-helper-card">
-      <h2>🎯 <span data-i18n="jury_panel_title">Console d'Évaluation Jury (Comptes Fictifs)</span></h2>
-      <p class="small-muted" data-i18n="jury_panel_desc">Cliquez sur un agent fictif pour pré-remplir ses identifiants et son code 2FA TOTP temps-réel, ou testez le rejet d'un intrus :</p>
-      <div id="demoAccountsList" class="demo-accounts-list"></div>
-      <div class="intrus-test-box">
-        <button type="button" id="testIntrusBtn" class="btn-danger-outline full-width">
-          🛡️ Épreuve Jury « Intrus » : Tester un compte non enrôlé (@intrus.externe)
+      <!-- Sélecteur de langue et accès rapide aux profils de démonstration (discret en bas) -->
+      <div class="auth-footer">
+        <div class="lang-row">
+          <span data-i18n="lang_label">Langue :</span>
+          <select id="langSelectAuth" class="select-compact">
+            <option value="fr">Français</option>
+            <option value="mos">Mooré</option>
+            <option value="dyu">Dioula</option>
+            <option value="ff">Fulfuldé</option>
+          </select>
+        </div>
+
+        <details class="quick-accounts-drawer">
+          <summary>Comptes de démonstration pré-configurés</summary>
+          <div id="demoAccountsList" class="quick-accounts-list"></div>
+          <button type="button" id="testIntrusBtn" class="btn-link-danger">
+            Simuler une tentative d'accès par un compte non inscrit
+          </button>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- ÉCRAN 2 : APPLICATION DE MESSAGERIE (STYLE TCHAP / ELEMENT / WHATSAPP)-->
+  <!-- ===================================================================== -->
+  <div id="workspaceScreen" class="app-layout hidden">
+    <!-- Colonne 1 : Barre d'icônes latérale (Rail de navigation) -->
+    <nav class="app-rail">
+      <div class="rail-top">
+        <div class="bf-emblem small" title="FasoSouverain — Burkina Faso">
+          <span class="flag-r"></span>
+          <span class="flag-g"></span>
+          <span class="flag-star">★</span>
+        </div>
+
+        <button class="rail-btn active" data-view="chatView" title="Discussions & Canaux">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span data-i18n="tab_chat">Messages</span>
+        </button>
+
+        <button class="rail-btn" data-view="directoryView" title="Annuaire des Ministères">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span data-i18n="tab_directory">Annuaire</span>
+        </button>
+
+        <button class="rail-btn" data-view="adminView" id="adminRailBtn" title="Administration & Sécurité">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <span data-i18n="tab_admin">Sécurité</span>
         </button>
       </div>
-    </aside>
-  </main>
 
-  <!-- ÉCRAN 2 : ESPACE DE TRAVAIL MESSAGERIE SOUVERAINE -->
-  <div id="workspaceScreen" class="workspace-container hidden">
-    <!-- Barre latérale gauche : Profil Agent + Navigation + Canaux -->
-    <aside class="sidebar">
-      <div class="agent-badge-card" id="currentUserCard"></div>
+      <div class="rail-bottom">
+        <select id="langSelectApp" class="rail-lang" title="Changer la langue de l'application">
+          <option value="fr">FR</option>
+          <option value="mos">MOS</option>
+          <option value="dyu">DYU</option>
+          <option value="ff">FF</option>
+        </select>
 
-      <nav class="nav-tabs">
-        <button class="nav-tab active" data-tab="chatTab">💬 <span data-i18n="tab_chat">Canaux Chiffrés</span></button>
-        <button class="nav-tab" data-tab="directoryTab">🏛️ <span data-i18n="tab_directory">Annuaire Ministères</span></button>
-        <button class="nav-tab" data-tab="blindTab">🔍 <span data-i18n="tab_blind">Preuve Serveur Aveugle</span></button>
-        <button class="nav-tab" data-tab="adminTab" id="adminTabBtn">⚙️ <span data-i18n="tab_admin">Admin & Révocation</span></button>
-      </nav>
+        <button id="panicBtn" class="rail-btn danger" title="Verrouillage & Effacement d'urgence de l'appareil">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span data-i18n="panic_btn">Urgence</span>
+        </button>
 
-      <div class="rooms-section">
-        <div class="rooms-header">
-          <span data-i18n="channels_title">SALONS CHIFFRÉS (MEGOLM)</span>
-          <button id="newRoomBtn" class="btn-icon" title="Créer un salon chiffré">+</button>
-        </div>
-        <ul id="roomsList" class="rooms-list"></ul>
+        <button id="logoutBtn" class="rail-btn" title="Se déconnecter">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          <span data-i18n="logout_btn">Quitter</span>
+        </button>
       </div>
-    </aside>
+    </nav>
 
-    <!-- Zone centrale principale -->
-    <section class="main-panel">
-      <!-- ONGLET 1 : MESSAGERIE CHIFFRÉE DE BOUT EN BOUT -->
-      <div id="chatTab" class="tab-content active">
-        <div class="chat-header">
-          <div>
-            <h2 id="activeRoomName">Sélectionnez un canal</h2>
-            <p id="activeRoomTopic" class="small-muted"></p>
-          </div>
-          <div class="chat-crypto-meta">
-            <span class="crypto-badge">Protocole Matrix Megolm · AES-GCM 256 bits</span>
-            <span id="roomKeyFingerprint" class="key-fingerprint"></span>
+    <!-- ================================================================= -->
+    <!-- VUE 1 : MESSAGERIE (LISTE DES CONVERSATIONS + FENÊTRE DE CHAT)    -->
+    <!-- ================================================================= -->
+    <div id="chatView" class="view-container active-view">
+      <!-- Liste des discussions à gauche -->
+      <aside class="conversations-sidebar">
+        <div class="sidebar-top">
+          <div id="currentUserCard" class="my-profile-bar"></div>
+          <div class="search-bar">
+            <input type="text" id="roomSearchInput" placeholder="Rechercher un salon ou un agent..." />
+            <button id="newRoomBtn" class="btn-new-chat" title="Nouveau canal">+</button>
           </div>
         </div>
 
-        <!-- Bandeau d'avertissement Classification / Anti-Capture -->
-        <div id="classificationBanner" class="classification-banner normal">
-          🛡️ <span id="classificationBannerText">Protection E2EE active : le serveur Synapse ne stocke que du contenu chiffré (m.room.encrypted).</span>
+        <div class="conv-groups">
+          <div class="conv-section-label" data-i18n="channels_title">Canaux & Conversations</div>
+          <ul id="roomsList" class="conv-list"></ul>
+        </div>
+      </aside>
+
+      <!-- Fenêtre de conversation centrale -->
+      <section class="chat-stage">
+        <header class="stage-header">
+          <div class="stage-room-info">
+            <div class="room-avatar" id="activeRoomAvatar">#</div>
+            <div>
+              <div class="room-title-row">
+                <h2 id="activeRoomName">Sélectionnez une discussion</h2>
+                <span class="e2ee-lock-badge" title="Chiffré de bout en bout (Matrix Olm/Megolm)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  Chiffré de bout en bout
+                </span>
+              </div>
+              <p id="activeRoomTopic" class="room-subtitle"></p>
+            </div>
+          </div>
+
+          <div class="stage-actions">
+            <span id="roomKeyFingerprint" class="session-badge" title="Clé de session cryptographique"></span>
+          </div>
+        </header>
+
+        <!-- Bandeau discret uniquement si le salon / message est en mode Diffusion Restreinte ou Confidentiel -->
+        <div id="classificationBanner" class="security-notice hidden">
+          <span id="classificationBannerText"></span>
         </div>
 
-        <!-- Liste des messages -->
-        <div id="messagesContainer" class="messages-container"></div>
+        <!-- Fil de discussion (Bulles de messages) -->
+        <div id="messagesContainer" class="messages-stream"></div>
 
-        <!-- Barre d'envoi avec Innovations (Classification, Instruction de Service, Note Vocale) -->
-        <div class="composer-card">
-          <div class="composer-options">
-            <div class="option-item">
-              <label for="classificationSelect" data-i18n="label_classification">Classification :</label>
-              <select id="classificationSelect">
-                <option value="NORMAL">🟢 Service Standard (Normal)</option>
-                <option value="DIFFUSION_RESTREINTE">🟠 Diffusion Restreinte (Anti-copie · Expire 1h)</option>
-                <option value="CONFIDENTIEL">🔴 Confidentiel État (Directeurs/Admin · Expire 5m)</option>
+        <!-- Barre de rédaction moderne -->
+        <footer class="composer-bar">
+          <!-- Barre d'options métier (Classification, Expiration, Instruction officielle) -->
+          <div class="composer-toolbar">
+            <div class="toolbar-group">
+              <span class="toolbar-label" data-i18n="label_classification">Confidentialité :</span>
+              <select id="classificationSelect" class="pill-select">
+                <option value="NORMAL">Standard</option>
+                <option value="DIFFUSION_RESTREINTE">Diffusion restreinte (Anti-copie)</option>
+                <option value="CONFIDENTIEL">Confidentiel (Éphémère)</option>
               </select>
             </div>
 
-            <div class="option-item">
-              <label for="ttlSelect" data-i18n="label_ttl">Expiration :</label>
-              <select id="ttlSelect">
-                <option value="0">Aucune</option>
-                <option value="30">⏱️ 30 secondes (Démo Jury)</option>
-                <option value="300">⏱️ 5 minutes</option>
-                <option value="3600">⏱️ 1 heure</option>
+            <div class="toolbar-group">
+              <span class="toolbar-label" data-i18n="label_ttl">Message éphémère :</span>
+              <select id="ttlSelect" class="pill-select">
+                <option value="0">Permanent</option>
+                <option value="30">30 secondes</option>
+                <option value="300">5 minutes</option>
+                <option value="3600">1 heure</option>
               </select>
             </div>
 
-            <label class="checkbox-label" id="instructionToggleWrapper">
+            <label class="toolbar-toggle" id="instructionToggleWrapper" title="Demander un accusé de réception signé aux destinataires">
               <input type="checkbox" id="isInstructionCheckbox" />
-              📜 <span data-i18n="label_instruction">Instruction de Service (Accusé signé requis)</span>
+              <span data-i18n="label_instruction">Note / Instruction officielle (Accusé de lecture)</span>
             </label>
           </div>
 
-          <form id="messageForm" class="composer-form">
+          <!-- Zone de saisie de texte + Pièce jointe + Note vocale + Envoi -->
+          <form id="messageForm" class="composer-input-row">
+            <input type="file" id="fileAttachmentInput" class="hidden" />
+            <button type="button" id="attachFileBtn" class="icon-action-btn" title="Joindre un document chiffré de bout en bout">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+
             <input
               type="text"
               id="messageInput"
               data-i18n-placeholder="msg_placeholder"
-              placeholder="Écrire un message chiffré de bout en bout..."
+              placeholder="Écrire un message..."
               autocomplete="off"
             />
-            <button type="button" id="voiceNoteBtn" class="btn-voice" title="Enregistrer un message vocal chiffré en langue nationale">
-              🎙️ <span id="voiceBtnLabel" data-i18n="btn_voice">Vocal</span>
+
+            <button type="button" id="voiceNoteBtn" class="icon-action-btn" title="Envoyer une note vocale">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
             </button>
-            <button type="submit" class="btn-primary" data-i18n="btn_send">Chiffrer & Envoyer 🔒</button>
+
+            <button type="submit" class="btn-send-msg" title="Envoyer">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              <span data-i18n="btn_send">Envoyer</span>
+            </button>
           </form>
-        </div>
-      </div>
+        </footer>
+      </section>
+    </div>
 
-      <!-- ONGLET 2 : ANNUAIRE OFFICIEL DES AGENTS PAR MINISTÈRE -->
-      <div id="directoryTab" class="tab-content hidden">
-        <div class="panel-inner">
-          <div class="panel-header-flex">
-            <div>
-              <h2 data-i18n="dir_title">Annuaire Officiel des Agents Publics Assermentés</h2>
-              <p class="small-muted" data-i18n="dir_subtitle">Répertoire souverain par Ministère, Direction et Fonction avec statut d'habilitation temps-réel.</p>
-            </div>
-            <div>
-              <select id="ministryFilterSelect" class="filter-select">
-                <option value="ALL">Tous les Ministères & Institutions</option>
-              </select>
-            </div>
+    <!-- ================================================================= -->
+    <!-- VUE 2 : ANNUAIRE OFFICIEL DES AGENTS PAR MINISTÈRE                -->
+    <!-- ================================================================= -->
+    <div id="directoryView" class="view-container hidden">
+      <div class="page-scroll">
+        <div class="page-header">
+          <div>
+            <h2 data-i18n="dir_title">Annuaire des Ministères & Institutions</h2>
+            <p class="muted-text" data-i18n="dir_subtitle">Recherchez un agent public par ministère ou direction pour démarrer une conversation directe chiffrée.</p>
           </div>
-          <div id="directoryGrid" class="directory-grid"></div>
+          <div class="header-filters">
+            <select id="ministryFilterSelect" class="select-input">
+              <option value="ALL">Tous les Ministères</option>
+            </select>
+          </div>
         </div>
-      </div>
 
-      <!-- ONGLET 3 : ÉPREUVE JURY « LE SERVEUR NE LIT RIEN » -->
-      <div id="blindTab" class="tab-content hidden">
-        <div class="panel-inner">
-          <div class="panel-header-flex">
-            <div>
-              <h2>🔍 Épreuve Jury : « Le serveur ne lit rien » (Inspection Base & Réseau)</h2>
-              <p class="small-muted">Vérification en temps réel que le serveur ne possède aucun message en clair (0 <code>m.room.message</code>) et ne stocke que des payloads chiffrés <code>m.room.encrypted</code>.</p>
-            </div>
-            <button id="refreshBlindBtn" class="btn-primary">🔄 Actualiser l'inspection</button>
+        <div id="directoryGrid" class="contacts-grid"></div>
+      </div>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- VUE 3 : ADMINISTRATION, GESTION DES ACCÈS & AUDIT CRYPTO          -->
+    <!-- ================================================================= -->
+    <div id="adminView" class="view-container hidden">
+      <div class="page-scroll">
+        <div class="page-header">
+          <div>
+            <h2>Administration des Accès & Sécurité du Serveur</h2>
+            <p class="muted-text">Gestion des habilitations agents, révocation immédiate des appareils perdus et vérification du chiffrement serveur.</p>
+          </div>
+          <button id="refreshBlindBtn" class="btn-ghost">Actualiser l'état</button>
+        </div>
+
+        <div class="admin-columns">
+          <!-- Gestion des comptes et révocation -->
+          <div class="card-panel">
+            <h3>Gestion des Agents Enrôlés</h3>
+            <p class="muted-text small">En cas de départ d'un agent ou de perte de téléphone, la révocation coupe instantanément toutes ses sessions.</p>
+            <div id="adminAgentsList" class="user-manage-list"></div>
           </div>
 
-          <div id="blindCheckResult" class="blind-result-grid"></div>
-        </div>
-      </div>
-
-      <!-- ONGLET 4 : ADMINISTRATION, ENRÔLEMENT 2FA & RÉVOCATION IMMÉDIATE -->
-      <div id="adminTab" class="tab-content hidden">
-        <div class="panel-inner">
-          <h2>⚙️ Console d'Administration Souveraine (DGTD) — Enrôlement & Révocation Immédiate</h2>
-          <p class="small-muted">Lorsqu'un agent est révoqué (départ, perte du téléphone), tous ses jetons d'accès sont détruits immédiatement et il est retiré de tous les salons chiffrés.</p>
-
-          <div class="admin-split">
-            <!-- Liste pour Révocation en 1 clic -->
-            <div class="admin-box">
-              <h3>⚡ Épreuve Jury : Révocation Immédiate d'un Agent</h3>
-              <div id="adminAgentsList" class="admin-agents-list"></div>
-            </div>
-
-            <!-- Formulaire d'Enrôlement d'un nouvel agent -->
-            <div class="admin-box">
-              <h3>➕ Enrôler un Nouvel Agent Vérifié (avec 2FA & Rôle)</h3>
-              <form id="enrollForm" class="auth-form">
-                <div class="form-group">
-                  <label>Identifiant (prenom.nom)</label>
-                  <input type="text" id="enrollLocalpart" placeholder="ex: moussa.zongo" required />
-                </div>
-                <div class="form-group">
-                  <label>Nom complet & Titre</label>
-                  <input type="text" id="enrollFullName" placeholder="ex: Moussa Zongo" required />
-                </div>
-                <div class="form-group">
-                  <label>Ministère de rattachement</label>
+          <!-- Enrôlement d'un nouvel agent -->
+          <div class="card-panel">
+            <h3>Inscrire un Nouvel Agent Public</h3>
+            <form id="enrollForm" class="auth-form">
+              <div class="field">
+                <label>Identifiant (prenom.nom)</label>
+                <input type="text" id="enrollLocalpart" placeholder="ex: moussa.zongo" required />
+              </div>
+              <div class="field">
+                <label>Nom complet & Fonction</label>
+                <input type="text" id="enrollFullName" placeholder="ex: Moussa Zongo — Chef de service" required />
+              </div>
+              <div class="row-2col">
+                <div class="field">
+                  <label>Ministère</label>
                   <select id="enrollMinistry">
-                    <option value="MTDPCE">MTDPCE — Transition Digitale</option>
-                    <option value="MEFP">MEFP — Économie et Finances</option>
-                    <option value="MATDS">MATDS — Administration Territoriale & Sécurité</option>
-                    <option value="MS">MS — Santé Publique</option>
-                    <option value="PRESIDENCE">SGG-CM — Secrétariat Général du Gouvernement</option>
+                    <option value="MTDPCE">MTDPCE (Numérique)</option>
+                    <option value="MEFP">MEFP (Finances)</option>
+                    <option value="MATDS">MATDS (Sécurité)</option>
+                    <option value="MS">MS (Santé)</option>
+                    <option value="PRESIDENCE">SGG-CM</option>
                   </select>
                 </div>
-                <div class="form-group">
-                  <label>Rôle RBAC</label>
+                <div class="field">
+                  <label>Habilitation / Rôle</label>
                   <select id="enrollRole">
-                    <option value="AGENT_PUBLIC">Agent Public Assermenté</option>
-                    <option value="DIRECTEUR">Directeur / Chef de Service</option>
-                    <option value="ADMIN_SG">Administrateur Sécurité (DGTD/SG)</option>
+                    <option value="AGENT_PUBLIC">Agent Public</option>
+                    <option value="DIRECTEUR">Directeur / Chef</option>
+                    <option value="ADMIN_SG">Administrateur</option>
                   </select>
                 </div>
-                <div class="form-group">
-                  <label>Mot de passe initial (12 caractères min.)</label>
-                  <input type="text" id="enrollPassword" value="Demo-Fictif-2026!" required />
-                </div>
-                <button type="submit" class="btn-primary full-width">Enrôler l'Agent & Générer Clé 2FA TOTP</button>
-              </form>
-              <div id="enrollResultBox" class="alert hidden"></div>
-            </div>
+              </div>
+              <div class="field">
+                <label>Mot de passe temporaire (12 caractères min.)</label>
+                <input type="text" id="enrollPassword" value="Demo-Fictif-2026!" required />
+              </div>
+              <button type="submit" class="btn-primary btn-block">Créer le compte & Générer la clé 2FA</button>
+            </form>
+            <div id="enrollResultBox" class="alert hidden"></div>
           </div>
         </div>
+
+        <!-- Audit cryptographique de la base de données -->
+        <div class="card-panel" style="margin-top:1.25rem;">
+          <h3>Audit Cryptographique & Minimisation des Métadonnées</h3>
+          <div id="blindCheckResult" class="audit-cards-row"></div>
+        </div>
       </div>
-    </section>
+    </div>
   </div>
 
   <script src="/app.js"></script>
