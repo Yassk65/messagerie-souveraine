@@ -1,0 +1,64 @@
+# Messagerie souveraine de l'administration - déploiement en UNE commande :
+#   docker compose up -d
+name: messagerie-souveraine
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_dev_only}
+      POSTGRES_DB: synapse
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse -d synapse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Génère homeserver.yaml, config Element, secrets et clé de signature (une seule fois)
+  init:
+    image: ghcr.io/element-hq/synapse:latest   # à épingler sur une version précise avant le dépôt
+    restart: "no"
+    entrypoint: ["/bin/sh", "/init.sh"]
+    environment:
+      SERVER_NAME: ${SERVER_NAME:-localhost}
+      PUBLIC_BASEURL: ${PUBLIC_BASEURL:-http://localhost:8008}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_dev_only}
+    volumes:
+      - ./config:/templates:ro
+      - ./config/init.sh:/init.sh:ro
+      - ./data/synapse:/data
+      - ./data/element:/element
+
+  synapse:
+    image: ghcr.io/element-hq/synapse:latest   # à épingler
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    environment:
+      SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+    volumes:
+      - ./data/synapse:/data
+    ports:
+      - "8008:8008"
+
+  element:
+    image: vectorim/element-web:latest          # à épingler
+    restart: unless-stopped
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - ./data/element/config.json:/app/config.json:ro
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:

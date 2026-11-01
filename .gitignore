@@ -1,0 +1,10 @@
+data/
+.env
+Sprint_Technique_Pre-Hackathon_2026-KFD.pdf
+__pycache__/
+*.pyc
+*.db
+*.sqlite3
+node_modules/
+.pytest_cache/
+
