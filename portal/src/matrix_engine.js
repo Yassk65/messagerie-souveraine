@@ -43,36 +43,39 @@ class EmbeddedMatrixEngine {
       });
     }
 
-    // Création des canaux institutionnels et discussions directes chiffrés par défaut
+    // Création des canaux cloisonnés par Ministère / Administration
     const defaultRooms = [
       {
-        roomId: `!canal-interministeriel:${this.serverName}`,
-        name: 'Coordination Interministérielle',
-        topic: 'Canal officiel des Ministères & Secrétariat Général',
-        ministry: 'ALL',
-        isDirect: false,
-        members: demoUsers.map((u) => `@${u.localpart}:${this.serverName}`),
-      },
-      {
         roomId: `!canal-mtdpce-dgtd:${this.serverName}`,
-        name: 'Direction Générale (DGTD)',
-        topic: 'Équipe Transformation Digitale & Infrastructures',
+        name: 'MTDPCE — Direction Générale (DGTD)',
+        topic: 'Espace interne réservé aux agents du MTDPCE',
         ministry: 'MTDPCE',
         isDirect: false,
         members: [`@admin:${this.serverName}`, `@aminata.ouedraogo:${this.serverName}`],
       },
       {
-        roomId: `!canal-cellule-crise:${this.serverName}`,
-        name: 'Veille & Opérations Territoriales',
-        topic: 'Coordination opérationnelle inter-services',
+        roomId: `!canal-mefp-tresor:${this.serverName}`,
+        name: 'MEFP — Direction Générale du Trésor',
+        topic: 'Espace interne réservé aux agents du Ministère des Finances (MEFP)',
+        ministry: 'MEFP',
+        isDirect: false,
+        members: [`@ibrahim.sawadogo:${this.serverName}`],
+      },
+      {
+        roomId: `!canal-matds-securite:${this.serverName}`,
+        name: 'MATDS — Opérations & Sécurité Territoriale',
+        topic: 'Espace interne réservé aux agents du MATDS',
         ministry: 'MATDS',
         isDirect: false,
-        members: [
-          `@admin:${this.serverName}`,
-          `@aminata.ouedraogo:${this.serverName}`,
-          `@fatoumata.kabore:${this.serverName}`,
-          `@ibrahim.sawadogo:${this.serverName}`,
-        ],
+        members: [`@fatoumata.kabore:${this.serverName}`],
+      },
+      {
+        roomId: `!canal-interministeriel:${this.serverName}`,
+        name: 'Coordination Interministérielle (Liaison Officielle)',
+        topic: 'Canal officiel de liaison inter-administrations',
+        ministry: 'INTER',
+        isDirect: false,
+        members: demoUsers.map((u) => `@${u.localpart}:${this.serverName}`),
       },
     ];
 
@@ -143,7 +146,7 @@ class EmbeddedMatrixEngine {
     return { ...session, user };
   }
 
-  registerUser(localpart, password, isAdmin = false) {
+  registerUser(localpart, password, isAdmin = false, ministry = 'MTDPCE') {
     const cleanLocal = String(localpart).replace(/^@/, '').split(':')[0].toLowerCase();
     const userId = `@${cleanLocal}:${this.serverName}`;
     this.users.set(userId, {
@@ -153,9 +156,12 @@ class EmbeddedMatrixEngine {
       admin: Boolean(isAdmin),
       deactivated: false,
     });
-    // Ajoute automatiquement au canal interministériel
-    const mainRoom = this.rooms.get(`!canal-interministeriel:${this.serverName}`);
-    if (mainRoom) mainRoom.members.add(userId);
+    // Rattache automatiquement l'agent aux salons internes de son propre ministère
+    for (const room of this.rooms.values()) {
+      if (!room.isDirect && (room.ministry === ministry || room.ministry === 'INTER')) {
+        room.members.add(userId);
+      }
+    }
     return { user_id: userId };
   }
 

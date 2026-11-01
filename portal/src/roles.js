@@ -125,17 +125,19 @@ const DEFAULT_DEMO_AGENTS = [
   {
     localpart: 'admin',
     fullName: 'Commandant Ousmane Traoré (Admin DGTD)',
+    email: 'ousmane.traore@mtdpce.gov.bf',
     matricule: 'BF-DGTD-0001',
     ministry: 'MTDPCE',
     direction: 'Direction Générale de la Transformation Digitale (DGTD)',
     title: 'Administrateur Sécurité Messagerie',
     role: 'ADMIN_SG',
-    totpSecret: 'JBSWY3DPEHPK3PXP', // Secret fixe de démo pour faciliter le test du jury
+    totpSecret: 'JBSWY3DPEHPK3PXP',
     status: 'ACTIVE',
   },
   {
     localpart: 'aminata.ouedraogo',
     fullName: 'Aminata Ouédraogo',
+    email: 'aminata.ouedraogo@mtdpce.gov.bf',
     matricule: 'BF-MTDPCE-2041',
     ministry: 'MTDPCE',
     direction: 'Direction des Systèmes d’Information',
@@ -147,6 +149,7 @@ const DEFAULT_DEMO_AGENTS = [
   {
     localpart: 'ibrahim.sawadogo',
     fullName: 'Ibrahim Sawadogo',
+    email: 'ibrahim.sawadogo@mefp.gov.bf',
     matricule: 'BF-MEFP-3108',
     ministry: 'MEFP',
     direction: 'Direction Générale du Trésor et de la Comptabilité Publique',
@@ -158,6 +161,7 @@ const DEFAULT_DEMO_AGENTS = [
   {
     localpart: 'fatoumata.kabore',
     fullName: 'Fatoumata Kaboré',
+    email: 'fatoumata.kabore@matds.gov.bf',
     matricule: 'BF-MATDS-1192',
     ministry: 'MATDS',
     direction: 'Direction de la Sécurité des Systèmes et Télécommunications',
@@ -176,3 +180,4 @@ module.exports = {
   hasPermission,
   canUseClassification,
 };
+

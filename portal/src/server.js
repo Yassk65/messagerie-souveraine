@@ -37,6 +37,7 @@ const {
   verifyPortalToken,
 } = require('./receipts');
 const { EmbeddedMatrixEngine } = require('./matrix_engine');
+const { SovereignEmail2FAService } = require('./mailer');
 
 class SovereignPortalApp {
   constructor(options = {}) {
@@ -50,18 +51,26 @@ class SovereignPortalApp {
     // Moteur Matrix (intégré et synchronisé avec Synapse)
     this.matrix = new EmbeddedMatrixEngine(this.serverName);
 
+    // Service d'envoi de code 2FA par courriel gouvernemental (.gov.bf)
+    this.mailer = new SovereignEmail2FAService();
+
     // Annuaire officiel des agents enrôlés : localpart -> fiche agent
     this.directory = new Map();
     for (const agent of DEFAULT_DEMO_AGENTS) {
       this.directory.set(agent.localpart, {
         ...agent,
+        email: agent.email || `${agent.localpart}@${agent.ministry.toLowerCase()}.gov.bf`,
         userId: `@${agent.localpart}:${this.serverName}`,
         enrolledAt: new Date(Date.now() - 86400000).toISOString(),
       });
     }
 
-    // Sessions pré-authentifiées en attente du 2e facteur (TOTP)
-    this.pendingSecondFactor = new Map(); // challengeId -> { localpart, matrixSession, expiresAt }
+    // Sessions pré-authentifiées en attente du 2e facteur (Email OTP + TOTP)
+    this.pendingSecondFactor = new Map(); // challengeId -> { localpart, emailOtpCode, matrixSession, expiresAt }
+
+    // Demandes personnelles de communication inter-administration (Cloisonnement par Ministère)
+    this.contactRequests = new Map(); // reqId -> { id, fromLocalpart, toLocalpart, fromMinistry, toMinistry, reason, status, createdAt }
+    this.approvedContacts = new Set(); // Set de paires triées "agentA|agentB"
 
     // Registre des accusés de lecture à valeur probante : eventId -> Array<Receipt>
     this.probativeReceipts = new Map();
@@ -87,6 +96,22 @@ class SovereignPortalApp {
       details,
     });
     if (this.auditLogs.length > 100) this.auditLogs.pop();
+  }
+
+  pairKey(localA, localB) {
+    return [String(localA).toLowerCase(), String(localB).toLowerCase()].sort().join('|');
+  }
+
+  /**
+   * Cloisonnement par administration :
+   * Deux agents peuvent communiquer directement s'ils appartiennent au MÊME Ministère/Administration,
+   * OU si une demande de contact personnelle inter-administration a été acceptée.
+   */
+  canCommunicateDirectly(agentA, agentB) {
+    if (!agentA || !agentB) return false;
+    if (agentA.localpart === agentB.localpart) return true;
+    if (agentA.ministry === agentB.ministry) return true;
+    return this.approvedContacts.has(this.pairKey(agentA.localpart, agentB.localpart));
   }
 
   /**
@@ -244,28 +269,56 @@ class SovereignPortalApp {
           password,
         });
 
+        // Génère et envoie le code 2FA par e-mail sur la boîte gouvernementale (.gov.bf) de l'agent
+        const emailOtpCode = this.mailer.generateEmailOtpCode();
+        const mailDelivery = await this.mailer.send2FACodeEmail({
+          toEmail: agent.email,
+          fullName: agent.fullName,
+          matricule: agent.matricule,
+          ministry: agent.ministry,
+          otpCode: emailOtpCode,
+        });
+
         const challengeId = `chl_${crypto.randomBytes(16).toString('hex')}`;
         this.pendingSecondFactor.set(challengeId, {
           localpart: cleanLocal,
+          emailOtpCode,
           matrixSession,
           expiresAt: Date.now() + 5 * 60 * 1000,
         });
 
+        this.logAudit(
+          '2FA_EMAIL_SENT',
+          cleanLocal,
+          `Code 2FA envoyé par courriel gouvernemental à ${agent.email}`
+        );
+
         return sendJson(200, {
           step: 'SECOND_FACTOR_REQUIRED',
           challengeId,
+          deliveryChannel: 'EMAIL_GOV_BF',
+          sentToEmail: agent.email,
+          mailId: mailDelivery.mailId,
           agentPreview: {
             localpart: agent.localpart,
             fullName: agent.fullName,
+            email: agent.email,
             matricule: agent.matricule,
             ministry: agent.ministry,
             role: agent.role,
           },
-          demoTotpHint: generateTOTP(agent.totpSecret),
+          demoTotpHint: emailOtpCode,
         });
       }
 
-      // 4. Étape 2 de Connexion : Vérification du Second Facteur (Code TOTP à 6 chiffres)
+      // 3b. Consultation de la boîte de réception gouvernementale locale (Webmail .gov.bf pour lire le code 2FA)
+      if (pathname === '/api/auth/webmail-inbox' && req.method === 'GET') {
+        const email = parsedUrl.searchParams.get('email') || '';
+        const messages = this.mailer.getInboxForEmail(email);
+        return sendJson(200, { email, messages });
+      }
+
+      // 4. Étape 2 de Connexion : Vérification du Second Facteur (Code reçu par E-mail ou TOTP RFC 6238)
       if (pathname === '/api/auth/login-step2' && req.method === 'POST') {
         const body = await readBody();
         const { challengeId, totpCode } = body;
@@ -275,7 +328,7 @@ class SovereignPortalApp {
           this.pendingSecondFactor.delete(challengeId);
           return sendJson(401, {
             error: 'CHALLENGE_EXPIRED',
-            message: 'La session de vérification a expiré. Veuillez recommencer.',
+            message: 'Le code de vérification a expiré. Veuillez recommencer.',
           });
         }
 
@@ -285,12 +338,20 @@ class SovereignPortalApp {
           return sendJson(403, { error: 'AGENT_REVOQUE', message: 'Compte agent révoqué.' });
         }
 
-        const isValidTotp = verifyTOTP(agent.totpSecret, totpCode);
+        const cleanInputCode = String(totpCode || '').trim();
+        const isEmailOtpValid =
+          pending.emailOtpCode &&
+          cleanInputCode.length === 6 &&
+          crypto.timingSafeEqual(
+            Buffer.from(cleanInputCode, 'utf8'),
+            Buffer.from(String(pending.emailOtpCode), 'utf8')
+          );
+        const isValidTotp = isEmailOtpValid || verifyTOTP(agent.totpSecret, cleanInputCode);
         if (!isValidTotp) {
-          this.logAudit('AUTH_FAILURE_FACTOR2', agent.localpart, 'Code TOTP (2e facteur) invalide');
+          this.logAudit('AUTH_FAILURE_FACTOR2', agent.localpart, 'Code 2FA (Email/TOTP) invalide');
           return sendJson(401, {
             error: 'INVALID_TOTP',
-            message: 'Code de sécurité à 6 chiffres (2FA TOTP) invalide.',
+            message: 'Code de sécurité à 6 chiffres invalide.',
           });
         }
 
@@ -352,16 +413,33 @@ class SovereignPortalApp {
         });
       }
 
-      // 6. Annuaire officiel des agents par ministère et fonction
+      // 6. Annuaire officiel des agents par ministère et statut de relation (Cloisonnement)
       if (pathname === '/api/directory' && req.method === 'GET') {
         const ministryFilter = parsedUrl.searchParams.get('ministry');
         const agents = [];
         for (const a of this.directory.values()) {
           if (ministryFilter && ministryFilter !== 'ALL' && a.ministry !== ministryFilter) continue;
+
+          const sameMinistry = a.ministry === session.ministry;
+          const canMessageDirectly = this.canCommunicateDirectly(session.agent, a);
+          let pendingRequestId = null;
+          let pendingDirection = null;
+          for (const reqItem of this.contactRequests.values()) {
+            if (reqItem.status !== 'PENDING') continue;
+            if (reqItem.fromLocalpart === session.localpart && reqItem.toLocalpart === a.localpart) {
+              pendingRequestId = reqItem.id;
+              pendingDirection = 'OUTGOING';
+            } else if (reqItem.fromLocalpart === a.localpart && reqItem.toLocalpart === session.localpart) {
+              pendingRequestId = reqItem.id;
+              pendingDirection = 'INCOMING';
+            }
+          }
+
           agents.push({
             localpart: a.localpart,
             userId: a.userId,
             fullName: a.fullName,
+            email: a.email,
             matricule: a.matricule,
             ministry: a.ministry,
             direction: a.direction,
@@ -369,9 +447,109 @@ class SovereignPortalApp {
             role: a.role,
             roleLabel: ROLES[a.role]?.label || a.role,
             status: a.status,
+            sameMinistry,
+            canMessageDirectly,
+            pendingRequestId,
+            pendingDirection,
           });
         }
         return sendJson(200, { ministries: MINISTRIES, agents });
+      }
+
+      // 6b. Gestion des demandes personnelles de communication inter-administration
+      if (pathname === '/api/contact-requests' && req.method === 'GET') {
+        const incoming = [];
+        const outgoing = [];
+        for (const r of this.contactRequests.values()) {
+          if (r.toLocalpart === session.localpart && r.status === 'PENDING') {
+            incoming.push(r);
+          } else if (r.fromLocalpart === session.localpart) {
+            outgoing.push(r);
+          }
+        }
+        return sendJson(200, { incoming, outgoing });
+      }
+
+      if (pathname === '/api/contact-requests' && req.method === 'POST') {
+        const body = await readBody();
+        const targetLocal = String(body.targetLocalpart || '').trim().toLowerCase();
+        const reason = String(body.reason || 'Besoin de coordination inter-services').trim();
+        const targetAgent = this.directory.get(targetLocal);
+
+        if (!targetAgent || targetAgent.status !== 'ACTIVE') {
+          return sendJson(404, { error: 'NOT_FOUND', message: 'Agent destinataire introuvable ou inactif.' });
+        }
+
+        if (this.canCommunicateDirectly(session.agent, targetAgent)) {
+          return sendJson(400, {
+            error: 'ALREADY_AUTHORIZED',
+            message: 'Vous êtes déjà autorisé à échanger directement avec cet agent.',
+          });
+        }
+
+        // Vérifie si une demande est déjà en attente
+        for (const existing of this.contactRequests.values()) {
+          if (
+            existing.status === 'PENDING' &&
+            ((existing.fromLocalpart === session.localpart && existing.toLocalpart === targetLocal) ||
+              (existing.fromLocalpart === targetLocal && existing.toLocalpart === session.localpart))
+          ) {
+            return sendJson(200, { request: existing, alreadyPending: true });
+          }
+        }
+
+        const reqId = `req_${crypto.randomBytes(6).toString('hex')}`;
+        const newReq = {
+          id: reqId,
+          fromLocalpart: session.localpart,
+          fromFullName: session.agent.fullName,
+          fromMinistry: session.ministry,
+          fromTitle: session.agent.title,
+          toLocalpart: targetAgent.localpart,
+          toFullName: targetAgent.fullName,
+          toMinistry: targetAgent.ministry,
+          reason,
+          status: 'PENDING',
+          createdAt: new Date().toISOString(),
+        };
+        this.contactRequests.set(reqId, newReq);
+        this.logAudit(
+          'CONTACT_REQUEST_SENT',
+          session.localpart,
+          `Demande de communication inter-administration (${session.ministry} -> ${targetAgent.ministry}) envoyée à ${targetAgent.localpart}`
+        );
+        return sendJson(201, { request: newReq });
+      }
+
+      if (pathname.startsWith('/api/contact-requests/') && pathname.endsWith('/respond') && req.method === 'POST') {
+        const reqId = decodeURIComponent(pathname.slice('/api/contact-requests/'.length, -'/respond'.length));
+        const body = await readBody();
+        const action = String(body.action || '').toUpperCase(); // 'ACCEPT' ou 'REJECT'
+        const reqItem = this.contactRequests.get(reqId);
+
+        if (!reqItem || reqItem.toLocalpart !== session.localpart) {
+          return sendJson(404, { error: 'NOT_FOUND', message: 'Demande de contact introuvable.' });
+        }
+
+        if (action === 'ACCEPT') {
+          reqItem.status = 'ACCEPTED';
+          this.approvedContacts.add(this.pairKey(reqItem.fromLocalpart, reqItem.toLocalpart));
+          const senderAgent = this.directory.get(reqItem.fromLocalpart);
+          const dm = this.matrix.getOrCreateDirectRoom(
+            session.userId,
+            reqItem.fromLocalpart,
+            `${senderAgent?.fullName || reqItem.fromLocalpart} (${reqItem.fromMinistry}) ↔ ${session.agent.fullName} (${session.ministry})`
+          );
+          this.logAudit(
+            'CONTACT_REQUEST_ACCEPTED',
+            session.localpart,
+            `Demande de contact inter-administration acceptée avec ${reqItem.fromLocalpart}`
+          );
+          return sendJson(200, { status: 'ACCEPTED', request: reqItem, room_id: dm.room_id });
+        } else {
+          reqItem.status = 'REJECTED';
+          return sendJson(200, { status: 'REJECTED', request: reqItem });
+        }
       }
 
       // 7. Liste des salons chiffrés de l'agent
@@ -380,7 +558,7 @@ class SovereignPortalApp {
         return sendJson(200, { rooms });
       }
 
-      // 8. Création d'un salon / canal institutionnel chiffré
+      // 8. Création d'un salon / canal institutionnel chiffré (Restreint aux agents du même ministère ou contacts approuvés)
       if (pathname === '/api/rooms' && req.method === 'POST') {
         const body = await readBody();
         if (body.isInstitutional && !hasPermission(session.role, 'CREATE_INSTITUTIONAL_CHANNEL')) {
@@ -389,17 +567,28 @@ class SovereignPortalApp {
             message: 'Seuls les Directeurs et Administrateurs peuvent créer un canal institutionnel officiel.',
           });
         }
+
+        const requestedMembers = Array.isArray(body.members) ? body.members : [];
+        const allowedMembers = [];
+        for (const lp of requestedMembers) {
+          const cleanLp = String(lp).replace(/^@/, '').split(':')[0].toLowerCase();
+          const targetAg = this.directory.get(cleanLp);
+          if (targetAg && this.canCommunicateDirectly(session.agent, targetAg)) {
+            allowedMembers.push(cleanLp);
+          }
+        }
+
         const created = this.matrix.createEncryptedRoom(session.userId, {
           name: body.name || 'Nouveau Salon Chiffré',
-          topic: body.topic || 'Chiffrement de bout en bout Megolm actif',
+          topic: body.topic || `Canal interne (${session.ministry}) chiffré de bout en bout`,
           ministry: body.ministry || session.ministry,
-          inviteLocalparts: Array.isArray(body.members) ? body.members : [],
+          inviteLocalparts: allowedMembers,
         });
         this.logAudit('ROOM_CREATED', session.localpart, `Création du salon chiffré ${created.room_id}`);
         return sendJson(201, created);
       }
 
-      // 8b. Démarrer ou rejoindre une discussion directe chiffrée (1:1) avec un agent de l'annuaire
+      // 8b. Démarrer ou rejoindre une discussion directe chiffrée (1:1) — Soumis au cloisonnement par administration
       if (pathname === '/api/rooms/direct' && req.method === 'POST') {
         const body = await readBody();
         const targetLocal = String(body.targetLocalpart || '').trim().toLowerCase();
@@ -407,6 +596,15 @@ class SovereignPortalApp {
         if (!targetAgent || targetAgent.status !== 'ACTIVE') {
           return sendJson(404, { error: 'NOT_FOUND', message: 'Agent introuvable ou inactif.' });
         }
+
+        // Vérification stricte du cloisonnement administratif
+        if (!this.canCommunicateDirectly(session.agent, targetAgent)) {
+          return sendJson(403, {
+            error: 'CROSS_ADMINISTRATION_REQUEST_REQUIRED',
+            message: `Cloisonnement administratif : ${targetAgent.fullName} appartient à une autre administration (${targetAgent.ministry}). Vous devez d'abord lui envoyer une demande de contact personnelle et attendre son acceptation.`,
+          });
+        }
+
         const dm = this.matrix.getOrCreateDirectRoom(
           session.userId,
           targetLocal,
@@ -524,13 +722,17 @@ class SovereignPortalApp {
         const role = ROLES[body.role] ? body.role : 'AGENT_PUBLIC';
         const ministry = body.ministry || 'MTDPCE';
         const totpSecret = generateBase32Secret(20);
+        const email =
+          String(body.email || '').trim().toLowerCase() ||
+          `${cleanLocal}@${ministry.toLowerCase()}.gov.bf`;
 
-        this.matrix.registerUser(cleanLocal, password, role === 'ADMIN_SG');
+        this.matrix.registerUser(cleanLocal, password, role === 'ADMIN_SG', ministry);
 
         const newAgent = {
           localpart: cleanLocal,
           userId: `@${cleanLocal}:${this.serverName}`,
           fullName: body.fullName || cleanLocal,
+          email,
           matricule: body.matricule || `BF-${ministry}-${Math.floor(1000 + Math.random() * 9000)}`,
           ministry,
           direction: body.direction || 'Direction Générale',

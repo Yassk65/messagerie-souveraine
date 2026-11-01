@@ -346,10 +346,32 @@ function setupAuthHandlers() {
       currentChallengeId = res.challengeId;
       document.getElementById('agentPreviewBox').innerHTML = `
         <div><strong>${escapeHtml(res.agentPreview.fullName)}</strong></div>
-        <div style="font-size:0.76rem;opacity:0.85;">Matricule ${escapeHtml(res.agentPreview.matricule)} · ${escapeHtml(res.agentPreview.ministry)}</div>
+        <div style="font-size:0.76rem;opacity:0.9;">📧 Code envoyé à : <b>${escapeHtml(res.sentToEmail || res.agentPreview.email)}</b></div>
       `;
-      document.getElementById('totpInput').value = res.demoTotpHint || '';
-      document.getElementById('totpDemoHint').textContent = `Code généré par l'authentificateur : ${res.demoTotpHint}`;
+      document.getElementById('totpInput').value = '';
+      document.getElementById('totpDemoHint').textContent =
+        `Un courriel contenant votre code à 6 chiffres a été envoyé sur votre boîte ${res.sentToEmail || '.gov.bf'}.`;
+
+      // Charge l'e-mail reçu dans l'aperçu Webmail gouvernemental local
+      const mailRes = await apiFetch(
+        `/api/auth/webmail-inbox?email=${encodeURIComponent(res.sentToEmail || res.agentPreview.email)}`
+      );
+      const latestMail = mailRes.messages?.[0];
+      if (latestMail) {
+        document.getElementById('webmailContent').innerHTML = `
+          <div><strong>De :</strong> ${escapeHtml(latestMail.from)}</div>
+          <div><strong>À :</strong> ${escapeHtml(latestMail.to)}</div>
+          <div><strong>Objet :</strong> ${escapeHtml(latestMail.subject)}</div>
+          <hr style="margin:0.4rem 0;border:none;border-top:1px solid #e2e8f0;"/>
+          <div>${escapeHtml(latestMail.body)}</div>
+          <button type="button" id="copyOtpFromMailBtn" class="btn-primary" style="margin-top:0.5rem;padding:0.3rem 0.65rem;font-size:0.74rem;">
+            Utiliser ce code (${escapeHtml(latestMail.otpCode)})
+          </button>
+        `;
+        document.getElementById('copyOtpFromMailBtn').addEventListener('click', () => {
+          document.getElementById('totpInput').value = latestMail.otpCode;
+        });
+      }
 
       step1Form.classList.add('hidden');
       step2Form.classList.remove('hidden');
@@ -422,6 +444,7 @@ async function enterWorkspace() {
     : 'none';
 
   await loadDirectory();
+  await loadContactRequests();
   await loadRooms();
   await loadAdminAndAudit();
 
@@ -441,6 +464,7 @@ async function enterWorkspace() {
     if (!state.portalToken) return;
     try {
       await apiFetch('/api/me');
+      await loadContactRequests();
       if (state.activeRoomId) {
         await renderRoomMessages(state.activeRoomId, false);
       }
@@ -718,8 +742,63 @@ async function sendEncryptedMessageToRoom(
 }
 
 // ============================================================================
-// 6. ANNUAIRE DES MINISTÈRES (AVEC BOUTON « ENVOYER UN MESSAGE »)
+// 6. ANNUAIRE DES MINISTÈRES & CLOISONNEMENT INTER-ADMINISTRATIONS
 // ============================================================================
+
+async function loadContactRequests() {
+  try {
+    const data = await apiFetch('/api/contact-requests');
+    const incoming = data.incoming || [];
+    const box = document.getElementById('pendingRequestsSection');
+    const list = document.getElementById('incomingRequestsList');
+    if (!box || !list) return;
+
+    if (incoming.length === 0) {
+      box.classList.add('hidden');
+      list.innerHTML = '';
+      return;
+    }
+
+    box.classList.remove('hidden');
+    list.innerHTML = '';
+    for (const reqItem of incoming) {
+      const card = document.createElement('div');
+      card.className = 'incoming-req-card';
+      card.innerHTML = `
+        <div><strong>${escapeHtml(reqItem.fromFullName)}</strong> (${escapeHtml(reqItem.fromMinistry)})</div>
+        <div style="color:#64748b;font-size:0.73rem;margin-top:0.15rem;">Motif : « ${escapeHtml(reqItem.reason)} »</div>
+        <div class="req-actions">
+          <button type="button" class="btn-req-accept">Accepter</button>
+          <button type="button" class="btn-req-reject">Refuser</button>
+        </div>
+      `;
+      card.querySelector('.btn-req-accept').addEventListener('click', async () => {
+        const res = await apiFetch(`/api/contact-requests/${encodeURIComponent(reqItem.id)}/respond`, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'ACCEPT' }),
+        });
+        await loadContactRequests();
+        await loadDirectory();
+        await loadRooms();
+        if (res.room_id) {
+          switchView('chatView');
+          await selectRoom(res.room_id);
+        }
+      });
+      card.querySelector('.btn-req-reject').addEventListener('click', async () => {
+        await apiFetch(`/api/contact-requests/${encodeURIComponent(reqItem.id)}/respond`, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'REJECT' }),
+        });
+        await loadContactRequests();
+        await loadDirectory();
+      });
+      list.appendChild(card);
+    }
+  } catch (err) {
+    console.error(err);
+  }
+}
 
 async function loadDirectory() {
   const ministry = document.getElementById('ministryFilterSelect')?.value || 'ALL';
@@ -734,6 +813,23 @@ async function loadDirectory() {
     card.className = 'contact-card';
     const isMe = ag.localpart === state.agent?.localpart;
 
+    let actionButtonHtml = '';
+    if (!isMe && ag.status === 'ACTIVE') {
+      if (ag.canMessageDirectly) {
+        actionButtonHtml = `<button type="button" class="btn-primary start-dm-btn" style="padding:0.38rem 0.75rem;font-size:0.78rem;">💬 Message direct</button>`;
+      } else if (ag.pendingDirection === 'OUTGOING') {
+        actionButtonHtml = `<span class="badge-role" style="background:#fef3c7;color:#b45309;">⏳ Demande envoyée</span>`;
+      } else if (ag.pendingDirection === 'INCOMING') {
+        actionButtonHtml = `<button type="button" class="btn-req-accept accept-inline-btn" data-req-id="${escapeHtml(ag.pendingRequestId)}">✓ Accepter la demande</button>`;
+      } else {
+        actionButtonHtml = `<button type="button" class="btn-request-outline send-req-btn">✉️ Demander un contact</button>`;
+      }
+    }
+
+    const envTag = ag.sameMinistry
+      ? `<span class="badge-role" style="background:#ecfdf5;color:#047857;">Même administration (${escapeHtml(ag.ministry)})</span>`
+      : `<span class="badge-role">Autre administration (${escapeHtml(ag.ministry)})</span>`;
+
     card.innerHTML = `
       <div class="contact-top">
         <div class="avatar-circle">${escapeHtml(getInitials(ag.fullName))}</div>
@@ -743,31 +839,71 @@ async function loadDirectory() {
         </div>
       </div>
       <div style="font-size:0.8rem;color:#475569;margin-bottom:0.65rem;">
-        <div>🏛️ <strong>${escapeHtml(ag.ministry)}</strong> — ${escapeHtml(ag.direction)}</div>
-        <div style="margin-top:0.2rem;">Matricule : <code>${escapeHtml(ag.matricule)}</code></div>
+        <div style="margin-bottom:0.3rem;">${envTag}</div>
+        <div>🏛️ ${escapeHtml(ag.direction)}</div>
+        <div style="margin-top:0.2rem;">📧 <code>${escapeHtml(ag.email || '')}</code> · Matricule : <code>${escapeHtml(ag.matricule)}</code></div>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;padding-top:0.6rem;border-top:1px solid #f1f5f9;">
         <span class="badge-role">${ag.status === 'ACTIVE' ? '🟢 En service' : '🔴 Accès révoqué'}</span>
-        ${
-          !isMe && ag.status === 'ACTIVE'
-            ? `<button type="button" class="btn-primary start-dm-btn" style="padding:0.38rem 0.75rem;font-size:0.78rem;">💬 Message direct</button>`
-            : ''
-        }
+        ${actionButtonHtml}
       </div>
     `;
 
     const dmBtn = card.querySelector('.start-dm-btn');
     if (dmBtn) {
       dmBtn.addEventListener('click', async () => {
-        const res = await apiFetch('/api/rooms/direct', {
-          method: 'POST',
-          body: JSON.stringify({ targetLocalpart: ag.localpart }),
-        });
-        await loadRooms();
-        switchView('chatView');
-        await selectRoom(res.room_id);
+        try {
+          const res = await apiFetch('/api/rooms/direct', {
+            method: 'POST',
+            body: JSON.stringify({ targetLocalpart: ag.localpart }),
+          });
+          await loadRooms();
+          switchView('chatView');
+          await selectRoom(res.room_id);
+        } catch (err) {
+          alert(err.message);
+        }
       });
     }
+
+    const reqBtn = card.querySelector('.send-req-btn');
+    if (reqBtn) {
+      reqBtn.addEventListener('click', async () => {
+        const reason = prompt(
+          `Demande de communication inter-administration vers ${ag.fullName} (${ag.ministry}).\nIndiquez le motif professionnel :`,
+          'Coordination de dossier interministériel'
+        );
+        if (!reason) return;
+        try {
+          await apiFetch('/api/contact-requests', {
+            method: 'POST',
+            body: JSON.stringify({ targetLocalpart: ag.localpart, reason }),
+          });
+          await loadDirectory();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    }
+
+    const acceptInlineBtn = card.querySelector('.accept-inline-btn');
+    if (acceptInlineBtn) {
+      acceptInlineBtn.addEventListener('click', async () => {
+        const reqId = acceptInlineBtn.getAttribute('data-req-id');
+        const res = await apiFetch(`/api/contact-requests/${encodeURIComponent(reqId)}/respond`, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'ACCEPT' }),
+        });
+        await loadContactRequests();
+        await loadDirectory();
+        await loadRooms();
+        if (res.room_id) {
+          switchView('chatView');
+          await selectRoom(res.room_id);
+        }
+      });
+    }
+
     grid.appendChild(card);
   }
 }

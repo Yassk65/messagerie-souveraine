@@ -224,3 +224,81 @@ test('6. Accusé de lecture à valeur probante : signature HMAC-SHA256 et détec
   const tampered = { ...receipt, matricule: 'BF-FAKE-9999' };
   assert.equal(verifySignedReceipt(tampered, key), false);
 });
+
+test('7. Cloisonnement inter-administrations et 2FA par courriel gouvernemental (.gov.bf)', async () => {
+  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf' });
+
+  // Connexion de Aminata (MTDPCE) + vérification que le mail 2FA est bien délivré dans la boîte .gov.bf
+  const a1 = await (
+    await app.dispatchTestRequest('POST', '/api/auth/login-step1', {
+      body: { username: 'aminata.ouedraogo', password: 'Demo-Fictif-2026!' },
+    })
+  ).json();
+  assert.equal(a1.deliveryChannel, 'EMAIL_GOV_BF');
+  assert.equal(a1.sentToEmail, 'aminata.ouedraogo@mtdpce.gov.bf');
+
+  const inboxRes = await (
+    await app.dispatchTestRequest('GET', `/api/auth/webmail-inbox?email=${encodeURIComponent(a1.sentToEmail)}`)
+  ).json();
+  assert.ok(inboxRes.messages.length >= 1, 'Le courriel 2FA doit être présent dans la boîte gouvernementale');
+  const emailOtp = inboxRes.messages[0].otpCode;
+
+  const a2 = await (
+    await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
+      body: { challengeId: a1.challengeId, totpCode: emailOtp },
+    })
+  ).json();
+  assert.equal(a2.status, 'AUTHENTICATED');
+
+  // Aminata (MTDPCE) peut contacter directement Admin (même ministère MTDPCE)
+  const sameMinRes = await app.dispatchTestRequest('POST', '/api/rooms/direct', {
+    headers: { Authorization: `Bearer ${a2.portalToken}` },
+    body: { targetLocalpart: 'admin' },
+  });
+  assert.equal(sameMinRes.status, 200);
+
+  // Aminata (MTDPCE) tente de contacter directement Ibrahim (MEFP - autre administration) -> BLOQUÉ (403)
+  const crossMinBlocked = await app.dispatchTestRequest('POST', '/api/rooms/direct', {
+    headers: { Authorization: `Bearer ${a2.portalToken}` },
+    body: { targetLocalpart: 'ibrahim.sawadogo' },
+  });
+  assert.equal(crossMinBlocked.status, 403, 'Le message direct inter-administration sans demande préalable doit être bloqué');
+
+  // Aminata envoie une demande personnelle de contact à Ibrahim (MEFP)
+  const reqCreated = await app.dispatchTestRequest('POST', '/api/contact-requests', {
+    headers: { Authorization: `Bearer ${a2.portalToken}` },
+    body: { targetLocalpart: 'ibrahim.sawadogo', reason: 'Dossier budgétaire MTDPCE-MEFP' },
+  });
+  assert.equal(reqCreated.status, 201);
+  const reqData = await reqCreated.json();
+
+  // Ibrahim (MEFP) se connecte et accepte la demande personnelle d'Aminata
+  const i1 = await (
+    await app.dispatchTestRequest('POST', '/api/auth/login-step1', {
+      body: { username: 'ibrahim.sawadogo', password: 'Demo-Fictif-2026!' },
+    })
+  ).json();
+  const i2 = await (
+    await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
+      body: { challengeId: i1.challengeId, totpCode: i1.demoTotpHint },
+    })
+  ).json();
+
+  const acceptRes = await app.dispatchTestRequest(
+    'POST',
+    `/api/contact-requests/${encodeURIComponent(reqData.request.id)}/respond`,
+    {
+      headers: { Authorization: `Bearer ${i2.portalToken}` },
+      body: { action: 'ACCEPT' },
+    }
+  );
+  assert.equal(acceptRes.status, 200);
+
+  // Désormais, Aminata et Ibrahim peuvent échanger en message direct chiffré !
+  const crossMinAllowed = await app.dispatchTestRequest('POST', '/api/rooms/direct', {
+    headers: { Authorization: `Bearer ${a2.portalToken}` },
+    body: { targetLocalpart: 'ibrahim.sawadogo' },
+  });
+  assert.equal(crossMinAllowed.status, 200);
+});
+

@@ -39,11 +39,11 @@
         <button type="submit" class="btn-primary btn-block" data-i18n="btn_step1">Continuer</button>
       </form>
 
-      <!-- Étape 2 : Double authentification 2FA TOTP -->
+      <!-- Étape 2 : Double authentification par Courriel Gouvernemental (.gov.bf) -->
       <form id="loginStep2Form" class="auth-form hidden">
         <div id="agentPreviewBox" class="user-Verify-pill"></div>
         <div class="field">
-          <label for="totpInput" data-i18n="label_totp">Code d'authentification à 6 chiffres (Application 2FA)</label>
+          <label for="totpInput" data-i18n="label_totp">Code de sécurité à 6 chiffres envoyé par e-mail (.gov.bf)</label>
           <input
             type="text"
             id="totpInput"
@@ -55,6 +55,11 @@
           />
           <small id="totpDemoHint" class="helper-note"></small>
         </div>
+        <!-- Aperçu de l'e-mail reçu dans la messagerie gouvernementale locale -->
+        <details id="webmailDrawer" class="webmail-preview-box" open>
+          <summary>📩 Consulter le courriel reçu dans la boîte gouvernementale (.gov.bf)</summary>
+          <div id="webmailContent" class="webmail-body"></div>
+        </details>
         <div class="row-actions">
           <button type="button" id="backToStep1Btn" class="btn-ghost">Retour</button>
           <button type="submit" class="btn-primary" style="flex:1" data-i18n="btn_step2">Se connecter</button>
@@ -148,6 +153,12 @@
         </div>
 
         <div class="conv-groups">
+          <!-- Demandes personnelles inter-administrations en attente -->
+          <div id="pendingRequestsSection" class="pending-requests-box hidden">
+            <div class="conv-section-label">Demandes de contact reçues</div>
+            <div id="incomingRequestsList" class="incoming-req-list"></div>
+          </div>
+
           <div class="conv-section-label" data-i18n="channels_title">Canaux & Conversations</div>
           <ul id="roomsList" class="conv-list"></ul>
         </div>
