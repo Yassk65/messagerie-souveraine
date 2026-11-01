@@ -39,11 +39,23 @@
         <button type="submit" class="btn-primary btn-block" data-i18n="btn_step1">Continuer</button>
       </form>
 
-      <!-- Étape 2 : Double authentification (2FA) -->
-      <form id="loginStep2Form" class="auth-form hidden">
+      <!-- Étape 2 : Double authentification (2FA FreeOTP) -->
+      <form id="loginStep2Form" class="auth-form hidden" autocomplete="off">
         <div id="agentPreviewBox" class="user-Verify-pill"></div>
+
+        <!-- Affiché UNIQUEMENT lors de la toute première connexion (Enrôlement QR Code) -->
+        <div id="qrSetupContainer" class="qr-setup-box hidden">
+          <div class="qr-setup-title">📱 Première connexion : Configuration FreeOTP</div>
+          <p class="qr-setup-desc">
+            Scannez ce QR Code avec l'application <strong>FreeOTP</strong> (ou Google Authenticator) sur votre téléphone.
+            <br/><strong style="color:#be123c;">Attention : Pour votre sécurité, ce QR Code ne sera plus jamais affiché après cette première connexion.</strong>
+          </p>
+          <div id="qrSvgWrapper" class="qr-svg-holder"></div>
+          <div class="qr-secret-line">Clé manuelle : <code id="qrSecretText"></code></div>
+        </div>
+
         <div class="field">
-          <label for="totpInput" data-i18n="label_totp">Code de sécurité à 6 chiffres</label>
+          <label for="totpInput" id="totpFieldLabel" data-i18n="label_totp">Entrez le code à 6 chiffres depuis votre application FreeOTP</label>
           <input
             type="text"
             id="totpInput"
@@ -52,12 +64,13 @@
             pattern="\d{6}"
             placeholder="000 000"
             required
+            autocomplete="one-time-code"
           />
           <small id="totpDemoHint" class="helper-note"></small>
         </div>
         <div class="row-actions">
           <button type="button" id="backToStep1Btn" class="btn-ghost">Retour</button>
-          <button type="submit" class="btn-primary" style="flex:1" data-i18n="btn_step2">Se connecter</button>
+          <button type="submit" class="btn-primary" style="flex:1" data-i18n="btn_step2">Vérifier le code & Se connecter</button>
         </div>
       </form>
 
@@ -177,6 +190,7 @@
           </div>
 
           <div class="stage-actions">
+            <span id="sessionTimerBadge" class="session-badge" title="Déconnexion automatique au bout de 30 minutes">⏱️ Session : 30:00</span>
             <span id="roomKeyFingerprint" class="session-badge" title="Clé de session cryptographique"></span>
           </div>
         </header>

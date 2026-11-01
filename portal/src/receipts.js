@@ -56,8 +56,9 @@ function verifySignedReceipt(receipt, signingKey) {
 
 /**
  * Génère un jeton de session portail après validation réussie du 1er facteur (Matrix) + 2e facteur (TOTP).
+ * Par défaut, la session expire automatiquement au bout de 30 minutes (1800 secondes).
  */
-function signPortalToken(payload, secretKey, expiresInSeconds = 28800) {
+function signPortalToken(payload, secretKey, expiresInSeconds = 1800) {
   const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
   const body = Buffer.from(JSON.stringify({ ...payload, exp }), 'utf8').toString('base64url');
   const sig = crypto.createHmac('sha256', String(secretKey)).update(body).digest('base64url');
@@ -93,3 +94,4 @@ module.exports = {
   signPortalToken,
   verifyPortalToken,
 };
+

@@ -1091,3 +1091,51 @@ button {
   background: #fef3c7;
 }
 
+/* Boîte QR Code (affichée uniquement à la 1ère connexion) */
+.qr-setup-box {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 1rem;
+  text-align: center;
+}
+
+.qr-setup-title {
+  font-weight: 800;
+  font-size: 0.9rem;
+  color: #0f172a;
+  margin-bottom: 0.35rem;
+}
+
+.qr-setup-desc {
+  font-size: 0.78rem;
+  color: #475569;
+  line-height: 1.4;
+  margin-bottom: 0.75rem;
+}
+
+.qr-svg-holder {
+  display: inline-flex;
+  padding: 0.5rem;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.qr-secret-line {
+  margin-top: 0.55rem;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.qr-secret-line code {
+  background: #e2e8f0;
+  color: #0f172a;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+

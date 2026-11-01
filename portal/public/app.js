@@ -114,6 +114,8 @@ const state = {
   activeRoomId: null,
   roomCryptoKeys: new Map(),
   pollTimer: null,
+  sessionCountdownTimer: null,
+  sessionExpiresAt: null,
   demoAccounts: [],
   directoryMap: new Map(), // userId -> fullName
   lastRenderedCount: -1,
@@ -243,7 +245,9 @@ function handleImmediateRevocationKick(reasonMsg) {
   state.matrixAccessToken = null;
   state.agent = null;
   state.activeRoomId = null;
+  state.sessionExpiresAt = null;
   if (state.pollTimer) clearInterval(state.pollTimer);
+  if (state.sessionCountdownTimer) clearInterval(state.sessionCountdownTimer);
   localStorage.clear();
   sessionStorage.clear();
 
@@ -348,10 +352,28 @@ function setupAuthHandlers() {
         <div><strong>${escapeHtml(res.agentPreview.fullName)}</strong></div>
         <div style="font-size:0.76rem;opacity:0.9;">Matricule ${escapeHtml(res.agentPreview.matricule)} · ${escapeHtml(res.agentPreview.ministry)}</div>
       `;
-      document.getElementById('totpInput').value = res.demoTotpHint || '';
-      document.getElementById('totpDemoHint').textContent =
-        `Code 2FA à 6 chiffres : ${res.demoTotpHint}`;
 
+      const qrBox = document.getElementById('qrSetupContainer');
+      const qrSvgHolder = document.getElementById('qrSvgWrapper');
+      const qrSecretText = document.getElementById('qrSecretText');
+
+      if (res.isFirstSetup && res.qrSvg) {
+        // 1ère connexion : affiche le QR Code FreeOTP une seule et unique fois !
+        qrSvgHolder.innerHTML = res.qrSvg;
+        qrSecretText.textContent = res.totpSecret || '';
+        qrBox.classList.remove('hidden');
+        document.getElementById('totpDemoHint').textContent =
+          'Scannez le QR Code ci-dessus avec FreeOTP puis saisissez le code à 6 chiffres généré sur votre téléphone.';
+      } else {
+        // Connexions suivantes : le QR Code est définitivement scellé et caché !
+        qrSvgHolder.innerHTML = '';
+        qrSecretText.textContent = '';
+        qrBox.classList.add('hidden');
+        document.getElementById('totpDemoHint').textContent =
+          'Ouvrez votre application FreeOTP (hors-ligne) et saisissez votre code à 6 chiffres.';
+      }
+
+      document.getElementById('totpInput').value = '';
       step1Form.classList.add('hidden');
       step2Form.classList.remove('hidden');
       document.getElementById('totpInput').focus();
@@ -372,6 +394,7 @@ function setupAuthHandlers() {
       state.portalToken = res.portalToken;
       state.matrixAccessToken = res.matrixAccessToken;
       state.agent = { ...res.agent, deviceId: res.deviceId };
+      state.sessionExpiresAt = res.sessionExpiresAt || Date.now() + 30 * 60 * 1000;
 
       step2Form.classList.add('hidden');
       step1Form.classList.remove('hidden');
@@ -448,9 +471,31 @@ async function enterWorkspace() {
         await renderRoomMessages(state.activeRoomId, false);
       }
     } catch {
-      // Déconnexion gérée automatiquement si l'agent est révoqué
+      // Déconnexion gérée automatiquement si l'agent est révoqué ou expiré
     }
   }, 2500);
+
+  // Minuteur de déconnexion automatique au bout de 30 minutes
+  if (state.sessionCountdownTimer) clearInterval(state.sessionCountdownTimer);
+  const updateSessionTimer = () => {
+    if (!state.portalToken || !state.sessionExpiresAt) return;
+    const remainingMs = state.sessionExpiresAt - Date.now();
+    if (remainingMs <= 0) {
+      handleImmediateRevocationKick(
+        '⏱️ Session expirée automatiquement (limite de sécurité de 30 minutes atteinte). Veuillez vous reconnecter avec votre code FreeOTP.'
+      );
+      return;
+    }
+    const totalSec = Math.floor(remainingMs / 1000);
+    const min = String(Math.floor(totalSec / 60)).padStart(2, '0');
+    const sec = String(totalSec % 60).padStart(2, '0');
+    const badge = document.getElementById('sessionTimerBadge');
+    if (badge) {
+      badge.textContent = `⏱️ Session : ${min}:${sec}`;
+    }
+  };
+  updateSessionTimer();
+  state.sessionCountdownTimer = setInterval(updateSessionTimer, 1000);
 }
 
 async function loadRooms() {
@@ -1115,8 +1160,8 @@ window.addEventListener('DOMContentLoaded', () => {
       });
       box.className = 'alert success';
       box.innerHTML = `
-        Compte créé pour <strong>${escapeHtml(res.agent.fullName)}</strong>.<br/>
-        Clé 2FA TOTP : <code>${res.agent.totpSecret}</code> (Code actuel : <b>${res.currentTotpCode}</b>)
+        <div>✅ Compte créé pour <strong>${escapeHtml(res.agent.fullName)}</strong>.</div>
+        <div style="font-size:0.78rem;margin-top:0.25rem;">Lors de sa première connexion, son QR Code FreeOTP unique lui sera présenté puis scellé définitivement.</div>
       `;
       box.classList.remove('hidden');
       await loadAdminAndAudit();

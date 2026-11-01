@@ -38,6 +38,7 @@ const {
 } = require('./receipts');
 const { EmbeddedMatrixEngine } = require('./matrix_engine');
 const { SovereignEmail2FAService } = require('./mailer');
+const { generateQrSvg } = require('./qrcode');
 
 class SovereignPortalApp {
   constructor(options = {}) {
@@ -61,6 +62,7 @@ class SovereignPortalApp {
         ...agent,
         email: agent.email || `${agent.localpart}@${agent.ministry.toLowerCase()}.gov.bf`,
         userId: `@${agent.localpart}:${this.serverName}`,
+        totpEnrolled: false, // Scellé à true dès la fin de la 1ère connexion (le QR code n'est plus jamais affiché)
         enrolledAt: new Date(Date.now() - 86400000).toISOString(),
       });
     }
@@ -285,7 +287,7 @@ class SovereignPortalApp {
           password,
         });
 
-        // Génère le code TOTP RFC 6238 hors-ligne (FreeOTP) et envoie aussi la notification locale
+        // Génère le code TOTP RFC 6238 hors-ligne (FreeOTP)
         const totpCodeNow = generateTOTP(agent.totpSecret);
         const mailDelivery = await this.mailer.send2FACodeEmail({
           toEmail: agent.email,
@@ -303,9 +305,18 @@ class SovereignPortalApp {
           expiresAt: Date.now() + 5 * 60 * 1000,
         });
 
+        // Politique de sécurité : le QR Code FreeOTP n'est transmis QUE lors de la toute première connexion !
+        const isFirstSetup = !agent.totpEnrolled;
+        const otpAuthUri = isFirstSetup ? buildOtpAuthUri(agent.localpart, agent.totpSecret) : null;
+        const qrSvg = isFirstSetup ? generateQrSvg(otpAuthUri) : null;
+
         return sendJson(200, {
           step: 'SECOND_FACTOR_REQUIRED',
           challengeId,
+          isFirstSetup,
+          qrSvg,
+          totpSecret: isFirstSetup ? agent.totpSecret : null,
+          otpAuthUri,
           deliveryChannel: 'EMAIL_GOV_BF',
           sentToEmail: agent.email,
           mailId: mailDelivery.mailId,
@@ -328,7 +339,7 @@ class SovereignPortalApp {
         return sendJson(200, { email, messages });
       }
 
-      // 4. Étape 2 de Connexion : Vérification du Second Facteur (Code reçu par E-mail ou TOTP RFC 6238)
+      // 4. Étape 2 de Connexion : Vérification du Second Facteur (Code FreeOTP à 6 chiffres)
       if (pathname === '/api/auth/login-step2' && req.method === 'POST') {
         const body = await readBody();
         const { challengeId, totpCode } = body;
@@ -358,15 +369,28 @@ class SovereignPortalApp {
           );
         const isValidTotp = isEmailOtpValid || verifyTOTP(agent.totpSecret, cleanInputCode);
         if (!isValidTotp) {
-          this.logAudit('AUTH_FAILURE_FACTOR2', agent.localpart, 'Code 2FA (Email/TOTP) invalide');
+          this.logAudit('AUTH_FAILURE_FACTOR2', agent.localpart, 'Code 2FA FreeOTP invalide');
           return sendJson(401, {
             error: 'INVALID_TOTP',
-            message: 'Code de sécurité à 6 chiffres invalide.',
+            message: 'Code OTP à 6 chiffres invalide. Vérifiez l’application FreeOTP sur votre téléphone.',
           });
         }
 
         this.pendingSecondFactor.delete(challengeId);
 
+        // Scelle définitivement l'enrôlement 2FA après la 1ère connexion réussie : le QR code ne sera plus jamais affiché !
+        if (!agent.totpEnrolled) {
+          agent.totpEnrolled = true;
+          this.logAudit(
+            '2FA_QR_SEALED',
+            agent.localpart,
+            'Premier appairage FreeOTP validé : QR Code scellé définitivement.'
+          );
+        }
+
+        // Session strictement limitée à 30 minutes (1800 secondes)
+        const sessionDurationSeconds = 1800;
+        const sessionExpiresAt = Date.now() + sessionDurationSeconds * 1000;
         const portalToken = signPortalToken(
           {
             localpart: agent.localpart,
@@ -377,18 +401,21 @@ class SovereignPortalApp {
             matrixAccessToken: pending.matrixSession.access_token,
             deviceId: pending.matrixSession.device_id,
           },
-          this.signingKey
+          this.signingKey,
+          sessionDurationSeconds
         );
 
         this.logAudit(
           'AUTH_SUCCESS_2FA',
           agent.localpart,
-          `Authentification forte réussie (Mot de passe + TOTP) — Rôle: ${agent.role}`
+          `Authentification forte réussie (Mot de passe + FreeOTP) — Expiration auto dans 30 min`
         );
 
         return sendJson(200, {
           status: 'AUTHENTICATED',
           portalToken,
+          sessionExpiresAt,
+          sessionMaxAgeSeconds: sessionDurationSeconds,
           matrixAccessToken: pending.matrixSession.access_token,
           deviceId: pending.matrixSession.device_id,
           agent: {
@@ -749,6 +776,7 @@ class SovereignPortalApp {
           title: body.title || 'Agent Public',
           role,
           totpSecret,
+          totpEnrolled: false,
           status: 'ACTIVE',
           enrolledAt: new Date().toISOString(),
         };
@@ -760,10 +788,11 @@ class SovereignPortalApp {
           `Enrôlement de ${newAgent.userId} (${newAgent.matricule}) avec rôle ${role}`
         );
 
+        const otpAuthUri = buildOtpAuthUri(cleanLocal, totpSecret);
         return sendJson(201, {
           agent: newAgent,
-          otpAuthUri: buildOtpAuthUri(cleanLocal, totpSecret),
-          currentTotpCode: generateTOTP(totpSecret),
+          otpAuthUri,
+          qrSvg: generateQrSvg(otpAuthUri),
         });
       }
 

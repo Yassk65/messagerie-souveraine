@@ -249,6 +249,19 @@ test('7. Cloisonnement inter-administrations et 2FA par courriel gouvernemental 
     })
   ).json();
   assert.equal(a2.status, 'AUTHENTICATED');
+  assert.equal(a1.isFirstSetup, true, 'La 1ère connexion doit présenter le QR Code FreeOTP');
+  assert.ok(a1.qrSvg && a1.qrSvg.includes('<svg'), 'Un vrai QR Code SVG doit être généré');
+  assert.equal(a2.sessionMaxAgeSeconds, 1800, 'La session doit expirer au bout de 30 minutes (1800s)');
+
+  // 2e connexion d'Aminata : le QR Code doit être définitivement scellé (isFirstSetup = false, qrSvg = null)
+  const aSecondLogin = await (
+    await app.dispatchTestRequest('POST', '/api/auth/login-step1', {
+      body: { username: 'aminata.ouedraogo', password: 'Demo-Fictif-2026!' },
+    })
+  ).json();
+  assert.equal(aSecondLogin.isFirstSetup, false, 'Le QR Code ne doit plus jamais être affiché après la 1ère connexion');
+  assert.equal(aSecondLogin.qrSvg, null);
+  assert.equal(aSecondLogin.totpSecret, null);
 
   // Aminata (MTDPCE) peut contacter directement Admin (même ministère MTDPCE)
   const sameMinRes = await app.dispatchTestRequest('POST', '/api/rooms/direct', {
