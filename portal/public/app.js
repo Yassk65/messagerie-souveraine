@@ -346,32 +346,11 @@ function setupAuthHandlers() {
       currentChallengeId = res.challengeId;
       document.getElementById('agentPreviewBox').innerHTML = `
         <div><strong>${escapeHtml(res.agentPreview.fullName)}</strong></div>
-        <div style="font-size:0.76rem;opacity:0.9;">📧 Code envoyé à : <b>${escapeHtml(res.sentToEmail || res.agentPreview.email)}</b></div>
+        <div style="font-size:0.76rem;opacity:0.9;">Matricule ${escapeHtml(res.agentPreview.matricule)} · ${escapeHtml(res.agentPreview.ministry)}</div>
       `;
-      document.getElementById('totpInput').value = '';
+      document.getElementById('totpInput').value = res.demoTotpHint || '';
       document.getElementById('totpDemoHint').textContent =
-        `Un courriel contenant votre code à 6 chiffres a été envoyé sur votre boîte ${res.sentToEmail || '.gov.bf'}.`;
-
-      // Charge l'e-mail reçu dans l'aperçu Webmail gouvernemental local
-      const mailRes = await apiFetch(
-        `/api/auth/webmail-inbox?email=${encodeURIComponent(res.sentToEmail || res.agentPreview.email)}`
-      );
-      const latestMail = mailRes.messages?.[0];
-      if (latestMail) {
-        document.getElementById('webmailContent').innerHTML = `
-          <div><strong>De :</strong> ${escapeHtml(latestMail.from)}</div>
-          <div><strong>À :</strong> ${escapeHtml(latestMail.to)}</div>
-          <div><strong>Objet :</strong> ${escapeHtml(latestMail.subject)}</div>
-          <hr style="margin:0.4rem 0;border:none;border-top:1px solid #e2e8f0;"/>
-          <div>${escapeHtml(latestMail.body)}</div>
-          <button type="button" id="copyOtpFromMailBtn" class="btn-primary" style="margin-top:0.5rem;padding:0.3rem 0.65rem;font-size:0.74rem;">
-            Utiliser ce code (${escapeHtml(latestMail.otpCode)})
-          </button>
-        `;
-        document.getElementById('copyOtpFromMailBtn').addEventListener('click', () => {
-          document.getElementById('totpInput').value = latestMail.otpCode;
-        });
-      }
+        `Code 2FA à 6 chiffres : ${res.demoTotpHint}`;
 
       step1Form.classList.add('hidden');
       step2Form.classList.remove('hidden');
