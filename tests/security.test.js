@@ -19,6 +19,11 @@ const { createSignedReceipt, verifySignedReceipt } = require('../portal/src/rece
 const { createNodeDPoPClientIdentity } = require('../portal/src/dpop');
 const { SovereignPortalApp } = require('../portal/src/server');
 
+// Code que FreeOTP afficherait sur le téléphone de l'agent (secret connu uniquement de l'agent)
+function otpFor(app, localpart) {
+  return generateTOTP(app.directory.get(localpart).totpSecret);
+}
+
 test('1. Second facteur TOTP (RFC 6238) : génération, validation et rejet d’un code erroné', () => {
   const secret = generateBase32Secret(20);
   const now = 1730000000000;
@@ -67,7 +72,7 @@ test('3. Authentification complète 2FA + Épreuve « Le serveur ne lit rien » 
   const step2Res = await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
     body: {
       challengeId: step1Data.challengeId,
-      totpCode: step1Data.demoTotpHint,
+      totpCode: otpFor(app, 'aminata.ouedraogo'),
     },
   });
   assert.equal(step2Res.status, 200);
@@ -131,7 +136,7 @@ test('4. Contrôle des Rôles (RBAC) : un Agent standard ne peut pas envoyer en 
   ).json();
   const s2 = await (
     await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
-      body: { challengeId: s1.challengeId, totpCode: s1.demoTotpHint },
+      body: { challengeId: s1.challengeId, totpCode: otpFor(app, 'ibrahim.sawadogo') },
     })
   ).json();
 
@@ -166,7 +171,7 @@ test('5. Épreuve Jury « Révocation immédiate » : un agent révoqué perd im
   ).json();
   const f2 = await (
     await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
-      body: { challengeId: f1.challengeId, totpCode: f1.demoTotpHint },
+      body: { challengeId: f1.challengeId, totpCode: otpFor(app, 'fatoumata.kabore') },
     })
   ).json();
 
@@ -184,7 +189,7 @@ test('5. Épreuve Jury « Révocation immédiate » : un agent révoqué perd im
   ).json();
   const a2 = await (
     await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
-      body: { challengeId: a1.challengeId, totpCode: a1.demoTotpHint },
+      body: { challengeId: a1.challengeId, totpCode: otpFor(app, 'admin') },
     })
   ).json();
 
@@ -235,18 +240,18 @@ test('7. Cloisonnement inter-administrations et 2FA par courriel gouvernemental 
       body: { username: 'aminata.ouedraogo', password: 'Demo-Fictif-2026!' },
     })
   ).json();
-  assert.equal(a1.deliveryChannel, 'EMAIL_GOV_BF');
-  assert.equal(a1.sentToEmail, 'aminata.ouedraogo@mtdpce.gov.bf');
-
-  const inboxRes = await (
-    await app.dispatchTestRequest('GET', `/api/auth/webmail-inbox?email=${encodeURIComponent(a1.sentToEmail)}`)
-  ).json();
-  assert.ok(inboxRes.messages.length >= 1, 'Le courriel 2FA doit être présent dans la boîte gouvernementale');
-  const emailOtp = inboxRes.messages[0].otpCode;
+  // Aucun code OTP (ni courriel, ni indice) ne doit fuiter dans les réponses API
+  assert.equal(a1.demoTotpHint, undefined);
+  assert.equal(a1.deliveryChannel, undefined);
+  assert.ok(!JSON.stringify(a1).includes(otpFor(app, 'aminata.ouedraogo')), 'Le code OTP ne doit jamais apparaître dans la réponse API');
+  const demoList = JSON.stringify(await (await app.dispatchTestRequest('GET', '/api/demo/accounts')).json());
+  assert.ok(!demoList.includes('currentTotpDemo'), 'La liste des comptes ne doit exposer aucun code OTP');
+  const webmail = await app.dispatchTestRequest('GET', '/api/auth/webmail-inbox?email=aminata.ouedraogo@mtdpce.gov.bf');
+  assert.notEqual(webmail.status, 200, 'La boîte webmail locale doit être supprimée');
 
   const a2 = await (
     await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
-      body: { challengeId: a1.challengeId, totpCode: emailOtp },
+      body: { challengeId: a1.challengeId, totpCode: otpFor(app, 'aminata.ouedraogo') },
     })
   ).json();
   assert.equal(a2.status, 'AUTHENTICATED');
@@ -294,7 +299,7 @@ test('7. Cloisonnement inter-administrations et 2FA par courriel gouvernemental 
   ).json();
   const i2 = await (
     await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
-      body: { challengeId: i1.challengeId, totpCode: i1.demoTotpHint },
+      body: { challengeId: i1.challengeId, totpCode: otpFor(app, 'ibrahim.sawadogo') },
     })
   ).json();
 
@@ -332,7 +337,7 @@ test('8. Sécurité Niveau NASA (DPoP RFC 9449 + Cookie HttpOnly + Anti-Rejeu) :
     headers: { 'User-Agent': 'FasoBrowser/1.0' },
     body: {
       challengeId: step1.challengeId,
-      totpCode: step1.demoTotpHint,
+      totpCode: otpFor(app, 'aminata.ouedraogo'),
       dpopPublicJwk: dpopClient.publicJwk,
       enableCookieBind: true,
     },
@@ -393,7 +398,7 @@ test('9. Enrôlement Admin Zero-Knowledge : l’admin enregistre l’agent sans 
   ).json();
   const adm2 = await (
     await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
-      body: { challengeId: adm1.challengeId, totpCode: adm1.demoTotpHint },
+      body: { challengeId: adm1.challengeId, totpCode: otpFor(app, 'admin') },
     })
   ).json();
 
@@ -429,7 +434,7 @@ test('9. Enrôlement Admin Zero-Knowledge : l’admin enregistre l’agent sans 
   // Validation du 1er code OTP par l'agent -> scelle définitivement le QR Code
   const m2 = await (
     await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
-      body: { challengeId: m1.challengeId, totpCode: m1.demoTotpHint },
+      body: { challengeId: m1.challengeId, totpCode: otpFor(app, 'moussa.zongo') },
     })
   ).json();
   assert.equal(m2.status, 'AUTHENTICATED');

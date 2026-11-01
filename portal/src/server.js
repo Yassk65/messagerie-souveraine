@@ -37,7 +37,6 @@ const {
   verifyPortalToken,
 } = require('./receipts');
 const { EmbeddedMatrixEngine } = require('./matrix_engine');
-const { SovereignEmail2FAService } = require('./mailer');
 const { generateQrSvg } = require('./qrcode');
 const { DPoPGuard } = require('./dpop');
 
@@ -54,7 +53,6 @@ class SovereignPortalApp {
     this.matrix = new EmbeddedMatrixEngine(this.serverName);
 
     // Service d'envoi de code 2FA par courriel gouvernemental (.gov.bf)
-    this.mailer = new SovereignEmail2FAService();
 
     // Protection DPoP (RFC 9449) & Anti-Rejeu (empêche l'utilisation d'un cookie/token volé)
     this.dpopGuard = new DPoPGuard();
@@ -73,7 +71,7 @@ class SovereignPortalApp {
     }
 
     // Sessions pré-authentifiées en attente du 2e facteur (Email OTP + TOTP)
-    this.pendingSecondFactor = new Map(); // challengeId -> { localpart, emailOtpCode, matrixSession, expiresAt }
+    this.pendingSecondFactor = new Map(); // challengeId -> { localpart, matrixSession, expiresAt }
 
     // Demandes personnelles de communication inter-administration (Cloisonnement par Ministère)
     this.contactRequests = new Map(); // reqId -> { id, fromLocalpart, toLocalpart, fromMinistry, toMinistry, reason, status, createdAt }
@@ -291,12 +289,6 @@ class SovereignPortalApp {
             role: agent.role,
             roleLabel: ROLES[agent.role]?.label || agent.role,
             status: agent.status,
-            currentTotpDemo:
-              agent.status !== 'ACTIVE'
-                ? 'RÉVOQUÉ'
-                : agent.totpSecret
-                  ? generateTOTP(agent.totpSecret)
-                  : 'À générer à la 1ère connexion',
           });
         }
         return sendJson(200, {
@@ -375,20 +367,9 @@ class SovereignPortalApp {
           agent.totpSecret = generateBase32Secret(20);
         }
 
-        // Génère le code TOTP RFC 6238 hors-ligne (FreeOTP)
-        const totpCodeNow = generateTOTP(agent.totpSecret);
-        const mailDelivery = await this.mailer.send2FACodeEmail({
-          toEmail: agent.email,
-          fullName: agent.fullName,
-          matricule: agent.matricule,
-          ministry: agent.ministry,
-          otpCode: totpCodeNow,
-        });
-
         const challengeId = `chl_${crypto.randomBytes(16).toString('hex')}`;
         this.pendingSecondFactor.set(challengeId, {
           localpart: cleanLocal,
-          emailOtpCode: totpCodeNow,
           matrixSession,
           expiresAt: Date.now() + 5 * 60 * 1000,
         });
@@ -405,9 +386,6 @@ class SovereignPortalApp {
           qrSvg,
           totpSecret: isFirstSetup ? agent.totpSecret : null,
           otpAuthUri,
-          deliveryChannel: 'EMAIL_GOV_BF',
-          sentToEmail: agent.email,
-          mailId: mailDelivery.mailId,
           agentPreview: {
             localpart: agent.localpart,
             fullName: agent.fullName,
@@ -416,15 +394,7 @@ class SovereignPortalApp {
             ministry: agent.ministry,
             role: agent.role,
           },
-          demoTotpHint: totpCodeNow,
         });
-      }
-
-      // 3b. Consultation de la boîte de réception gouvernementale locale (Webmail .gov.bf pour lire le code 2FA)
-      if (pathname === '/api/auth/webmail-inbox' && req.method === 'GET') {
-        const email = parsedUrl.searchParams.get('email') || '';
-        const messages = this.mailer.getInboxForEmail(email);
-        return sendJson(200, { email, messages });
       }
 
       // 4. Étape 2 de Connexion : Vérification du Second Facteur (Code FreeOTP à 6 chiffres)
@@ -448,14 +418,7 @@ class SovereignPortalApp {
         }
 
         const cleanInputCode = String(totpCode || '').trim();
-        const isEmailOtpValid =
-          pending.emailOtpCode &&
-          cleanInputCode.length === 6 &&
-          crypto.timingSafeEqual(
-            Buffer.from(cleanInputCode, 'utf8'),
-            Buffer.from(String(pending.emailOtpCode), 'utf8')
-          );
-        const isValidTotp = isEmailOtpValid || verifyTOTP(agent.totpSecret, cleanInputCode);
+        const isValidTotp = cleanInputCode.length === 6 && verifyTOTP(agent.totpSecret, cleanInputCode);
         if (!isValidTotp) {
           this.logAudit('AUTH_FAILURE_FACTOR2', agent.localpart, 'Code 2FA FreeOTP invalide');
           return sendJson(401, {
