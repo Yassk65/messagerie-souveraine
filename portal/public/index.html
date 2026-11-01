@@ -220,22 +220,42 @@
               <span class="toolbar-label" data-i18n="label_ttl">Message éphémère :</span>
               <select id="ttlSelect" class="pill-select">
                 <option value="0">Permanent</option>
-                <option value="30">30 secondes</option>
-                <option value="300">5 minutes</option>
-                <option value="3600">1 heure</option>
+                <option value="30">30 secondes (Auto-destruction)</option>
+                <option value="60">1 minute (Auto-destruction)</option>
+                <option value="300">5 minutes (Auto-destruction)</option>
+                <option value="3600">1 heure (Auto-destruction)</option>
               </select>
             </div>
 
-            <label class="toolbar-toggle" id="instructionToggleWrapper" title="Demander un accusé de réception signé aux destinataires">
+            <label class="toolbar-toggle" id="instructionToggleWrapper" title="Exiger de chaque destinataire une confirmation de lecture signée cryptographiquement (HMAC-SHA256) avec son matricule">
               <input type="checkbox" id="isInstructionCheckbox" />
-              <span data-i18n="label_instruction">Note / Instruction officielle (Accusé de lecture)</span>
+              <span data-i18n="label_instruction">📌 Note / Instruction officielle (Accusé de lecture signé)</span>
             </label>
+          </div>
+
+          <!-- Aperçu d'un document ou d'une photo sélectionné(e) avant envoi chiffré -->
+          <div id="stagedAttachmentBar" class="staged-attachment-bar hidden">
+            <div id="stagedAttachmentPreview" class="staged-preview-content"></div>
+            <button type="button" id="cancelAttachmentBtn" class="btn-cancel-small" title="Retirer la pièce jointe">✖ Retirer</button>
+          </div>
+
+          <!-- Barre d'enregistrement vocal en direct (Microphone) -->
+          <div id="voiceRecorderBar" class="voice-recorder-bar hidden">
+            <div class="rec-indicator">
+              <span class="rec-dot"></span>
+              <span id="voiceRecStatusText">Enregistrement vocal en cours...</span>
+              <strong id="voiceRecTimer">00:00</strong>
+            </div>
+            <div class="rec-actions">
+              <button type="button" id="cancelVoiceBtn" class="btn-cancel-small">🗑️ Annuler</button>
+              <button type="button" id="sendVoiceBtn" class="btn-send-voice">✅ Chiffrer & Envoyer le vocal</button>
+            </div>
           </div>
 
           <!-- Zone de saisie de texte + Pièce jointe + Note vocale + Envoi -->
           <form id="messageForm" class="composer-input-row">
-            <input type="file" id="fileAttachmentInput" class="hidden" />
-            <button type="button" id="attachFileBtn" class="icon-action-btn" title="Joindre un document chiffré de bout en bout">
+            <input type="file" id="fileAttachmentInput" class="hidden" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip" />
+            <button type="button" id="attachFileBtn" class="icon-action-btn" title="Joindre une photo ou un document (chiffré de bout en bout AES-256)">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             </button>
 
@@ -243,11 +263,11 @@
               type="text"
               id="messageInput"
               data-i18n-placeholder="msg_placeholder"
-              placeholder="Écrire un message..."
+              placeholder="Écrire un message ou joindre un document / photo..."
               autocomplete="off"
             />
 
-            <button type="button" id="voiceNoteBtn" class="icon-action-btn" title="Envoyer une note vocale">
+            <button type="button" id="voiceNoteBtn" class="icon-action-btn" title="Enregistrer un message vocal chiffré">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
             </button>
 

@@ -236,7 +236,7 @@ class SovereignPortalApp {
         'X-Content-Type-Options': 'nosniff',
         'X-Frame-Options': 'DENY',
         'Cache-Control': 'no-store, no-cache, must-revalidate',
-        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none';",
+        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none';",
         ...extraHeaders,
       });
       res.end(JSON.stringify(data));
@@ -250,7 +250,7 @@ class SovereignPortalApp {
         let raw = '';
         req.on('data', (chunk) => {
           raw += chunk;
-          if (raw.length > 2 * 1024 * 1024) reject(new Error('Payload trop volumineux'));
+          if (raw.length > 15 * 1024 * 1024) reject(new Error('Payload trop volumineux (max 15 Mo)'));
         });
         req.on('end', () => {
           if (!raw) return resolve({});

@@ -753,43 +753,250 @@ button {
 /* Note Vocale & Fichier joint dans une bulle */
 .voice-player {
   display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  background: rgba(0, 0, 0, 0.045);
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  margin-top: 0.25rem;
+  min-width: 250px;
+}
+
+.voice-player-top {
+  display: flex;
   align-items: center;
-  gap: 0.65rem;
-  background: rgba(0, 0, 0, 0.04);
-  padding: 0.45rem 0.7rem;
-  border-radius: 8px;
-  margin-top: 0.2rem;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.voice-audio-element {
+  width: 100%;
+  height: 34px;
+  border-radius: 6px;
 }
 
 .file-attachment-card {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  background: rgba(0, 0, 0, 0.04);
-  padding: 0.5rem 0.75rem;
+  gap: 0.65rem;
+  background: rgba(0, 0, 0, 0.045);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  padding: 0.55rem 0.75rem;
   border-radius: 8px;
   margin-bottom: 0.35rem;
   font-size: 0.84rem;
+}
+
+.encrypted-photo-box {
+  margin-bottom: 0.4rem;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #0f172a;
+  max-width: 340px;
+}
+
+.encrypted-photo-img {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  object-fit: cover;
+  cursor: pointer;
+}
+
+.encrypted-photo-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.6rem;
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
+  font-size: 0.72rem;
+}
+
+.btn-download-file {
+  background: var(--bf-green);
+  color: #fff;
+  padding: 0.28rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  border: none;
+}
+
+.btn-download-file:hover {
+  background: var(--bf-green-dark);
+}
+
+/* Protection visuelle niveau CONFIDENTIEL (Floutage anti-regard + Filigrane) */
+.confidential-content-shield {
+  position: relative;
+  border-radius: 6px;
+  transition: filter 0.2s ease;
+}
+
+.confidential-content-shield.blurred .shield-inner {
+  filter: blur(6px);
+  user-select: none;
+}
+
+.confidential-reveal-hint {
+  font-size: 0.7rem;
+  color: #be123c;
+  background: #ffe4e6;
+  border: 1px dashed #fda4af;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  margin-bottom: 0.3rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: 600;
+}
+
+.confidential-watermark {
+  font-size: 0.64rem;
+  color: #9f1239;
+  opacity: 0.75;
+  margin-top: 0.2rem;
+  font-family: monospace;
+}
+
+.ephemeral-timer-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.66rem;
 }
 
 /* Encadré Instruction de Service (Accusé de lecture officiel) */
 .official-instruction-card {
   margin-top: 0.5rem;
   padding: 0.55rem 0.75rem;
-  background: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.85);
   border: 1px solid #cbd5e1;
   border-left: 3px solid var(--bf-green);
   border-radius: 6px;
   font-size: 0.78rem;
 }
 
+.receipt-proof-item {
+  font-size: 0.73rem;
+  color: #065f46;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 4px;
+  padding: 0.25rem 0.45rem;
+  margin-top: 0.25rem;
+}
+
 .ack-btn-inline {
-  margin-top: 0.4rem;
+  margin-top: 0.45rem;
   background: var(--bf-green);
   color: #fff;
-  padding: 0.35rem 0.7rem;
+  padding: 0.38rem 0.75rem;
   font-size: 0.76rem;
+  font-weight: 600;
   border-radius: 6px;
+  cursor: pointer;
+}
+
+/* Aperçu de pièce jointe et Enregistreur vocal dans la barre de rédaction */
+.staged-attachment-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  padding: 0.45rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+}
+
+.staged-preview-content {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  overflow: hidden;
+}
+
+.staged-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid #cbd5e1;
+}
+
+.voice-recorder-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  padding: 0.5rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  color: #9f1239;
+}
+
+.rec-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #e11d48;
+  animation: pulseRec 1s infinite ease-in-out;
+}
+
+@keyframes pulseRec {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.45; }
+}
+
+.rec-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.btn-cancel-small {
+  background: #fff;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  padding: 0.3rem 0.65rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-send-voice {
+  background: #e11d48;
+  color: #fff;
+  border: none;
+  padding: 0.35rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 /* ========================================================================= */

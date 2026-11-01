@@ -117,10 +117,21 @@ const state = {
   roomCryptoKeys: new Map(),
   pollTimer: null,
   sessionCountdownTimer: null,
+  ephemeralCountdownTimer: null,
   sessionExpiresAt: null,
   demoAccounts: [],
   directoryMap: new Map(), // userId -> fullName
   lastRenderedCount: -1,
+  lastRenderSignature: '',
+  stagedAttachment: null, // Pièce jointe (photo / document) en attente d'envoi chiffré
+  voiceRecorder: {
+    mediaRecorder: null,
+    stream: null,
+    chunks: [],
+    timerInterval: null,
+    startedAt: 0,
+    isFallbackMode: false,
+  },
 };
 
 function bytesToBase64Url(bytes) {
@@ -521,6 +532,20 @@ async function enterWorkspace() {
     ? 'flex'
     : 'none';
 
+  // Adapte le sélecteur de confidentialité selon l'habilitation RBAC de l'agent
+  const classifSelect = document.getElementById('classificationSelect');
+  const confOption = classifSelect?.querySelector('option[value="CONFIDENTIEL"]');
+  if (confOption) {
+    if (!canSendInstruction) {
+      confOption.disabled = true;
+      confOption.textContent = 'Confidentiel (Réservé Directeur / Admin)';
+      if (classifSelect.value === 'CONFIDENTIEL') classifSelect.value = 'NORMAL';
+    } else {
+      confOption.disabled = false;
+      confOption.textContent = 'Confidentiel (Floutage + Éphémère)';
+    }
+  }
+
   await loadDirectory();
   await loadContactRequests();
   await loadRooms();
@@ -550,6 +575,27 @@ async function enterWorkspace() {
       // Déconnexion gérée automatiquement si l'agent est révoqué ou expiré
     }
   }, 2500);
+
+  // Minuteur fluide (1s) pour les messages éphémères à autodestruction automatique
+  if (state.ephemeralCountdownTimer) clearInterval(state.ephemeralCountdownTimer);
+  state.ephemeralCountdownTimer = setInterval(async () => {
+    if (!state.portalToken || !state.activeRoomId) return;
+    const pills = document.querySelectorAll('.ephemeral-timer-pill[data-expires-at]');
+    let anyExpired = false;
+    pills.forEach((pill) => {
+      const exp = Number(pill.getAttribute('data-expires-at'));
+      const remainSec = Math.ceil((exp - Date.now()) / 1000);
+      if (remainSec <= 0) {
+        anyExpired = true;
+      } else {
+        pill.textContent = `⏳ Auto-destruction : ${remainSec}s`;
+      }
+    });
+    if (anyExpired) {
+      state.lastRenderSignature = '';
+      await renderRoomMessages(state.activeRoomId, false);
+    }
+  }, 1000);
 
   // Minuteur de déconnexion automatique au bout de 30 minutes
   if (state.sessionCountdownTimer) clearInterval(state.sessionCountdownTimer);
@@ -615,6 +661,7 @@ function renderRoomsList() {
 async function selectRoom(roomId) {
   state.activeRoomId = roomId;
   state.lastRenderedCount = -1;
+  state.lastRenderSignature = '';
   const room = state.rooms.find((r) => r.room_id === roomId);
   if (room) {
     document.getElementById('activeRoomName').textContent = room.name;
@@ -642,8 +689,42 @@ function resolveSenderDisplayName(userId) {
     .join(' ');
 }
 
+function getFileTypeIcon(fileName = '', mimeType = '') {
+  const lower = fileName.toLowerCase();
+  if (mimeType.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/.test(lower)) return '🖼️';
+  if (lower.endsWith('.pdf') || mimeType === 'application/pdf') return '📕';
+  if (/\.(doc|docx)$/.test(lower)) return '📘';
+  if (/\.(xls|xlsx|csv)$/.test(lower)) return '📗';
+  if (/\.(ppt|pptx)$/.test(lower)) return '📙';
+  if (/\.(zip|rar|7z|tar|gz)$/.test(lower)) return '🗜️';
+  return '📄';
+}
+
+function triggerDecryptedFileDownload(dataUrl, fileName) {
+  if (!dataUrl) {
+    alert('Ce fichier de démonstration ne contient pas de binaire téléchargeable.');
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = fileName || 'document-dechiffre';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
 async function renderRoomMessages(roomId, forceScroll = false) {
   const data = await apiFetch(`/api/rooms/${encodeURIComponent(roomId)}/events`);
+  const signature = data.events
+    .map((e) => `${e.event_id}:${(e.receipts || []).length}`)
+    .join('|');
+
+  // Évite de reconstruire le DOM si aucun événement ni accusé de lecture n'a changé (ne coupe pas la lecture audio !)
+  if (!forceScroll && signature === state.lastRenderSignature) {
+    return;
+  }
+  state.lastRenderSignature = signature;
+
   const container = document.getElementById('messagesContainer');
   container.innerHTML = '';
 
@@ -652,7 +733,7 @@ async function renderRoomMessages(roomId, forceScroll = false) {
       const chip = document.createElement('div');
       chip.className = 'system-chip';
       chip.textContent =
-        '🔒 Les messages et les fichiers de cette discussion sont chiffrés de bout en bout. Même le serveur ne peut pas les lire.';
+        '🔒 Les messages, photos, documents et notes vocales de cette discussion sont chiffrés de bout en bout (AES-256-GCM / Matrix Megolm). Même le serveur ne peut pas les lire.';
       container.appendChild(chip);
       continue;
     }
@@ -678,10 +759,14 @@ async function renderRoomMessages(roomId, forceScroll = false) {
       const bubble = document.createElement('div');
       bubble.className = `message-bubble ${classification}`;
 
+      // Règles propres aux niveaux Diffusion Restreinte & Confidentiel (Anti-copie, Anti-clic droit)
       if (classification !== 'NORMAL') {
         bubble.addEventListener('copy', (e) => {
           e.preventDefault();
-          alert('Copie désactivée : ce message est protégé par la politique de confidentialité.');
+          alert('🔒 Copie bloquée : ce message est protégé par la classification ' + classification + '.');
+        });
+        bubble.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
         });
       }
 
@@ -690,62 +775,148 @@ async function renderRoomMessages(roomId, forceScroll = false) {
         minute: '2-digit',
       });
 
-      const expiryText = meta.expires_at
-        ? ` · ⏳ ${Math.max(1, Math.round((meta.expires_at - Date.now()) / 1000))}s`
+      const expiryBadgeHtml = meta.expires_at
+        ? ` <span class="ephemeral-timer-pill" data-expires-at="${meta.expires_at}">⏳ Auto-destruction : ${Math.max(
+            1,
+            Math.ceil((meta.expires_at - Date.now()) / 1000)
+          )}s</span>`
         : '';
 
       const classifBadgeHtml =
         classification !== 'NORMAL'
           ? `<span class="classif-pill ${classification}">${
-              classification === 'CONFIDENTIEL' ? 'Confidentiel' : 'Diffusion restreinte'
+              classification === 'CONFIDENTIEL' ? '🔴 Confidentiel' : '🟠 Diffusion restreinte'
             }</span>`
           : '';
 
-      let contentHtml = `<div class="bubble-text">${escapeHtml(decrypted.text || '')}</div>`;
+      let contentHtml = decrypted.text
+        ? `<div class="bubble-text">${escapeHtml(decrypted.text)}</div>`
+        : '';
 
-      // Pièce jointe chiffrée
+      // 1. Pièce jointe chiffrée (Photo avec aperçu visuel OU Document avec bouton Télécharger)
       if (decrypted.attachment) {
-        contentHtml = `
-          <div class="file-attachment-card">
-            <span>📄</span>
-            <div style="flex:1">
-              <div><strong>${escapeHtml(decrypted.attachment.name)}</strong></div>
-              <div style="font-size:0.72rem;color:#64748b;">${escapeHtml(decrypted.attachment.sizeLabel)} · Chiffré AES-256</div>
+        const att = decrypted.attachment;
+        const isImg =
+          att.isImage ||
+          (att.mimeType && att.mimeType.startsWith('image/')) ||
+          (att.dataUrl && att.dataUrl.startsWith('data:image/'));
+        const canDownload = classification !== 'CONFIDENTIEL' && Boolean(att.dataUrl);
+
+        if (isImg && att.dataUrl) {
+          contentHtml = `
+            <div class="encrypted-photo-box">
+              <img src="${att.dataUrl}" alt="${escapeHtml(att.name)}" class="encrypted-photo-img" title="Cliquez pour agrandir la photo déchiffrée" />
+              <div class="encrypted-photo-footer">
+                <span>🖼️ ${escapeHtml(att.name)} (${escapeHtml(att.sizeLabel)}) · Chiffré AES-256</span>
+                ${
+                  canDownload
+                    ? `<button type="button" class="btn-download-file download-att-btn">⬇ Télécharger</button>`
+                    : `<span style="color:#fda4af;font-weight:600;">🔒 Export bloqué (Confidentiel)</span>`
+                }
+              </div>
             </div>
-          </div>
-          ${decrypted.text ? `<div class="bubble-text">${escapeHtml(decrypted.text)}</div>` : ''}
-        `;
+            ${decrypted.text ? `<div class="bubble-text">${escapeHtml(decrypted.text)}</div>` : ''}
+          `;
+        } else {
+          const icon = getFileTypeIcon(att.name, att.mimeType);
+          contentHtml = `
+            <div class="file-attachment-card">
+              <span style="font-size:1.35rem;">${icon}</span>
+              <div style="flex:1;overflow:hidden;">
+                <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><strong>${escapeHtml(att.name)}</strong></div>
+                <div style="font-size:0.72rem;color:#64748b;">${escapeHtml(att.sizeLabel)} · Chiffré de bout en bout AES-256</div>
+              </div>
+              ${
+                canDownload
+                  ? `<button type="button" class="btn-download-file download-att-btn">⬇ Télécharger</button>`
+                  : classification === 'CONFIDENTIEL'
+                    ? `<span style="font-size:0.7rem;color:#be123c;font-weight:700;">🔒 Non exportable</span>`
+                    : ''
+              }
+            </div>
+            ${decrypted.text ? `<div class="bubble-text">${escapeHtml(decrypted.text)}</div>` : ''}
+          `;
+        }
       }
 
-      // Note vocale chiffrée
-      if (meta.is_voice && decrypted.voiceSummary) {
+      // 2. Note vocale chiffrée (Lecteur audio HTML5 réel + Transcription langue nationale)
+      if (meta.is_voice) {
+        const langLabels = { fr: 'Français', mos: 'Mooré', dyu: 'Dioula', ff: 'Fulfuldé' };
+        const langName = langLabels[meta.lang] || (meta.lang || 'fr').toUpperCase();
+        const durLabel = decrypted.voiceDurationSec ? ` · ${decrypted.voiceDurationSec}s` : '';
+
         contentHtml = `
           <div class="voice-player">
-            <button type="button" class="btn-primary play-voice-btn" style="padding:0.3rem 0.65rem;font-size:0.75rem;">▶ Écouter</button>
-            <div>
-              <div style="font-size:0.82rem;font-weight:600;">Note vocale (${(meta.lang || 'fr').toUpperCase()})</div>
-              <div style="font-size:0.78rem;color:#475569;">${escapeHtml(decrypted.voiceSummary)}</div>
+            <div class="voice-player-top">
+              <div style="font-size:0.8rem;font-weight:700;color:#0f172a;">
+                🎙️ Message vocal chiffré (${escapeHtml(langName)}${escapeHtml(durLabel)})
+              </div>
+              ${
+                decrypted.voiceSummary
+                  ? `<button type="button" class="btn-primary play-tts-btn" style="padding:0.2rem 0.5rem;font-size:0.7rem;">🔊 Voix synthèse</button>`
+                  : ''
+              }
             </div>
+            ${
+              decrypted.audioDataUrl
+                ? `<audio controls preload="metadata" src="${decrypted.audioDataUrl}" class="voice-audio-element"></audio>`
+                : ''
+            }
+            ${
+              decrypted.voiceSummary
+                ? `<div style="font-size:0.76rem;color:#475569;margin-top:0.1rem;">« ${escapeHtml(decrypted.voiceSummary)} »</div>`
+                : ''
+            }
           </div>
         `;
       }
 
-      // Instruction de service officielle avec accusé de lecture signé
+      // 3. Protection visuelle niveau CONFIDENTIEL (Floutage anti-capture d'écran + Filigrane au matricule du lecteur)
+      if (classification === 'CONFIDENTIEL') {
+        const readerWatermark = `${state.agent.fullName} · Matricule ${state.agent.matricule || state.agent.localpart}`;
+        contentHtml = `
+          <div class="confidential-content-shield blurred">
+            <div class="confidential-reveal-hint" title="Cliquez ou survolez pour révéler le contenu confidentiel">
+              👁️ Contenu CONFIDENTIEL protégé contre les regards/captures — Cliquez ou survolez pour lire
+            </div>
+            <div class="shield-inner">
+              ${contentHtml}
+            </div>
+            <div class="confidential-watermark">🛡️ Filigrane de traçabilité : consulté par ${escapeHtml(readerWatermark)}</div>
+          </div>
+        `;
+      }
+
+      // 4. Instruction de service officielle avec accusé de lecture signé cryptographiquement (HMAC-SHA256)
       let instructionHtml = '';
       if (meta.is_instruction) {
         const receipts = ev.receipts || [];
         const hasAcked = receipts.some((r) => r.agentId === state.agent.userId);
-        const ackedNames = receipts.map((r) => `✓ ${escapeHtml(r.fullName)} (${escapeHtml(r.ministry)})`).join(' · ');
+        const receiptsListHtml =
+          receipts.length > 0
+            ? receipts
+                .map((r) => {
+                  const ackTime = r.timestampIso
+                    ? new Date(r.timestampIso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                    : '';
+                  const shortSig = (r.signature || '').slice(0, 10);
+                  return `<div class="receipt-proof-item">✅ <strong>${escapeHtml(r.fullName)}</strong> (${escapeHtml(r.ministry)} · Matricule <code>${escapeHtml(r.matricule || 'N/A')}</code>) — Lu à ${ackTime} · Preuve HMAC <code>#${escapeHtml(shortSig)}</code></div>`;
+                })
+                .join('')
+            : '<div style="margin-top:0.25rem;color:#64748b;font-style:italic;">⏳ En attente de confirmation de lecture signée par les destinataires.</div>';
 
         instructionHtml = `
           <div class="official-instruction-card">
-            <div style="font-weight:700;color:#065f46;">📌 Instruction Officielle de Service</div>
-            <div style="margin-top:0.25rem;color:#475569;">
-              ${ackedNames || 'En attente de confirmation de lecture par les destinataires.'}
+            <div style="font-weight:700;color:#065f46;display:flex;align-items:center;justify-content:space-between;">
+              <span>📌 Instruction Officielle de Service</span>
+              <span style="font-size:0.68rem;background:#d1fae5;color:#065f46;padding:0.1rem 0.4rem;border-radius:4px;">Valeur probante HMAC-SHA256</span>
+            </div>
+            <div style="margin-top:0.25rem;">
+              ${receiptsListHtml}
             </div>
             ${
               !hasAcked
-                ? `<button type="button" class="ack-btn-inline" data-event-id="${ev.event_id}">Confirmer la lecture et signer l'accusé</button>`
+                ? `<button type="button" class="ack-btn-inline" data-event-id="${ev.event_id}">✍️ Confirmer la lecture et signer l'accusé avec mon matricule (${escapeHtml(state.agent.matricule || state.agent.localpart)})</button>`
                 : ''
             }
           </div>
@@ -760,10 +931,38 @@ async function renderRoomMessages(roomId, forceScroll = false) {
         ${contentHtml}
         ${instructionHtml}
         <div class="bubble-footer">
-          <span>${timeStr}${expiryText}</span>
-          <span title="Chiffré de bout en bout">🔒</span>
+          <span>${timeStr}</span>
+          ${expiryBadgeHtml}
+          <span title="Chiffré de bout en bout (AES-256-GCM)">🔒</span>
         </div>
       `;
+
+      // Événements interactifs sur la bulle
+      const shield = bubble.querySelector('.confidential-content-shield');
+      if (shield) {
+        shield.addEventListener('mouseenter', () => shield.classList.remove('blurred'));
+        shield.addEventListener('mouseleave', () => shield.classList.add('blurred'));
+        shield.addEventListener('click', () => shield.classList.toggle('blurred'));
+      }
+
+      const dlBtn = bubble.querySelector('.download-att-btn');
+      if (dlBtn && decrypted.attachment) {
+        dlBtn.addEventListener('click', () => {
+          triggerDecryptedFileDownload(decrypted.attachment.dataUrl, decrypted.attachment.name);
+        });
+      }
+
+      const photoImg = bubble.querySelector('.encrypted-photo-img');
+      if (photoImg && decrypted.attachment?.dataUrl) {
+        photoImg.addEventListener('click', () => {
+          const w = window.open('', '_blank');
+          if (w) {
+            w.document.write(
+              `<html><head><title>${escapeHtml(decrypted.attachment.name)} — Photo déchiffrée E2EE</title></head><body style="margin:0;background:#0f172a;display:flex;align-items:center;justify-content:center;min-height:100vh;"><img src="${decrypted.attachment.dataUrl}" style="max-width:95vw;max-height:95vh;border-radius:8px;"/></body></html>`
+            );
+          }
+        });
+      }
 
       const ackBtn = bubble.querySelector('.ack-btn-inline');
       if (ackBtn) {
@@ -772,14 +971,16 @@ async function renderRoomMessages(roomId, forceScroll = false) {
             method: 'POST',
             body: JSON.stringify({ eventId: ev.event_id, roomId }),
           });
+          state.lastRenderSignature = '';
           await renderRoomMessages(roomId, false);
         });
       }
 
-      const playBtn = bubble.querySelector('.play-voice-btn');
-      if (playBtn) {
-        playBtn.addEventListener('click', () => {
+      const ttsBtn = bubble.querySelector('.play-tts-btn');
+      if (ttsBtn && decrypted.voiceSummary) {
+        ttsBtn.addEventListener('click', () => {
           if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
             const utter = new SpeechSynthesisUtterance(decrypted.voiceSummary);
             utter.lang = 'fr-FR';
             window.speechSynthesis.speak(utter);
@@ -800,11 +1001,23 @@ async function renderRoomMessages(roomId, forceScroll = false) {
 
 async function sendEncryptedMessageToRoom(
   roomId,
-  { text, classification = 'NORMAL', ttlSec = 0, isInstruction = false, isVoice = false, voiceSummary = null, attachment = null }
+  {
+    text,
+    classification = 'NORMAL',
+    ttlSec = 0,
+    isInstruction = false,
+    isVoice = false,
+    voiceSummary = null,
+    audioDataUrl = null,
+    voiceDurationSec = null,
+    attachment = null,
+  }
 ) {
   const encrypted = await encryptRoomPayload(roomId, {
     text,
     voiceSummary,
+    audioDataUrl,
+    voiceDurationSec,
     attachment,
     senderName: state.agent.fullName,
     sentAt: new Date().toISOString(),
@@ -814,8 +1027,8 @@ async function sendEncryptedMessageToRoom(
     ttlSec > 0
       ? Date.now() + ttlSec * 1000
       : classification === 'CONFIDENTIEL'
-      ? Date.now() + 300 * 1000
-      : null;
+        ? Date.now() + 300 * 1000
+        : null;
 
   await apiFetch(`/api/rooms/${encodeURIComponent(roomId)}/send-encrypted`, {
     method: 'POST',
@@ -1106,28 +1319,95 @@ window.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('roomSearchInput').addEventListener('input', renderRoomsList);
 
-  // Bandeau discret de confidentialité
+  // Bandeau discret de confidentialité + sélection automatique de l'expiration en mode Confidentiel
   document.getElementById('classificationSelect').addEventListener('change', (e) => {
     const val = e.target.value;
     const banner = document.getElementById('classificationBanner');
     const text = document.getElementById('classificationBannerText');
+    const ttlSelect = document.getElementById('ttlSelect');
     if (val === 'NORMAL') {
       banner.classList.add('hidden');
     } else if (val === 'DIFFUSION_RESTREINTE') {
       banner.className = 'security-notice restricted';
-      text.textContent = 'Mode Diffusion Restreinte : copie et transfert désactivés pour ce message.';
+      text.textContent =
+        '🟠 Mode Diffusion Restreinte : copie (Ctrl+C) et clic droit désactivés sur ce message.';
     } else if (val === 'CONFIDENTIEL') {
       banner.className = 'security-notice confidential';
-      text.textContent = 'Mode Confidentiel : message éphémère à autodestruction automatique.';
+      text.textContent =
+        '🔴 Mode Confidentiel : floutage anti-capture d’écran, filigrane au matricule du lecteur, export de fichier bloqué et auto-destruction automatique.';
+      if (ttlSelect && ttlSelect.value === '0') {
+        ttlSelect.value = '300';
+      }
     }
   });
 
-  // Envoi d'un message texte chiffré
+  // Lecture d'un fichier local en DataURL Base64 pour chiffrement E2EE AES-256-GCM
+  const readFileAsDataUrl = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error('Impossible de lire le fichier sélectionné'));
+      reader.readAsDataURL(file);
+    });
+
+  const clearStagedAttachment = () => {
+    state.stagedAttachment = null;
+    document.getElementById('fileAttachmentInput').value = '';
+    document.getElementById('stagedAttachmentBar').classList.add('hidden');
+    document.getElementById('stagedAttachmentPreview').innerHTML = '';
+  };
+
+  document.getElementById('cancelAttachmentBtn').addEventListener('click', clearStagedAttachment);
+
+  // Sélection d'une photo ou d'un document à chiffrer de bout en bout
+  const fileBtn = document.getElementById('attachFileBtn');
+  const fileInput = document.getElementById('fileAttachmentInput');
+  fileBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files?.[0];
+    if (!file || !state.activeRoomId) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Le fichier dépasse la taille maximale autorisée (10 Mo).');
+      fileInput.value = '';
+      return;
+    }
+
+    const sizeKb = Math.max(1, Math.round(file.size / 1024));
+    const sizeLabel = sizeKb >= 1024 ? `${(sizeKb / 1024).toFixed(1)} Mo` : `${sizeKb} Ko`;
+    const dataUrl = await readFileAsDataUrl(file);
+    const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(file.name);
+
+    state.stagedAttachment = {
+      name: file.name,
+      sizeLabel,
+      mimeType: file.type || 'application/octet-stream',
+      isImage,
+      dataUrl,
+    };
+
+    const previewEl = document.getElementById('stagedAttachmentPreview');
+    const icon = getFileTypeIcon(file.name, file.type);
+    previewEl.innerHTML = `
+      ${
+        isImage
+          ? `<img src="${dataUrl}" class="staged-thumb" alt="Aperçu" />`
+          : `<span style="font-size:1.5rem;">${icon}</span>`
+      }
+      <div>
+        <div><strong>${escapeHtml(file.name)}</strong> (${escapeHtml(sizeLabel)})</div>
+        <div style="font-size:0.72rem;color:#047857;">🔒 Prêt à être chiffré de bout en bout (AES-256-GCM) — Cliquez sur « Envoyer »</div>
+      </div>
+    `;
+    document.getElementById('stagedAttachmentBar').classList.remove('hidden');
+    document.getElementById('messageInput').focus();
+  });
+
+  // Envoi d'un message texte et/ou d'une pièce jointe (photo / document) chiffrée de bout en bout
   document.getElementById('messageForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const input = document.getElementById('messageInput');
     const text = input.value.trim();
-    if (!text || !state.activeRoomId) return;
+    if ((!text && !state.stagedAttachment) || !state.activeRoomId) return;
 
     const classification = document.getElementById('classificationSelect').value;
     const ttlSec = Number(document.getElementById('ttlSelect').value || 0);
@@ -1139,60 +1419,166 @@ window.addEventListener('DOMContentLoaded', () => {
         classification,
         ttlSec,
         isInstruction,
+        attachment: state.stagedAttachment,
       });
       input.value = '';
+      clearStagedAttachment();
       document.getElementById('isInstructionCheckbox').checked = false;
+      state.lastRenderSignature = '';
       await renderRoomMessages(state.activeRoomId, true);
     } catch (err) {
       alert(err.message);
     }
   });
 
-  // Envoi d'un fichier joint chiffré de bout en bout
-  const fileBtn = document.getElementById('attachFileBtn');
-  const fileInput = document.getElementById('fileAttachmentInput');
-  fileBtn.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', async () => {
-    const file = fileInput.files?.[0];
-    if (!file || !state.activeRoomId) return;
-    const sizeKb = Math.max(1, Math.round(file.size / 1024));
-    try {
-      await sendEncryptedMessageToRoom(state.activeRoomId, {
-        text: document.getElementById('messageInput').value.trim(),
-        classification: document.getElementById('classificationSelect').value,
-        ttlSec: Number(document.getElementById('ttlSelect').value || 0),
-        isInstruction: document.getElementById('isInstructionCheckbox').checked,
-        attachment: {
-          name: file.name,
-          sizeLabel: `${sizeKb} Ko`,
-          mimeType: file.type || 'application/octet-stream',
-        },
-      });
-      fileInput.value = '';
-      document.getElementById('messageInput').value = '';
-      await renderRoomMessages(state.activeRoomId, true);
-    } catch (err) {
-      alert(err.message);
+  // Générateur de fichier audio WAV de secours (si le PC n'a pas de microphone branché)
+  const generateFallbackWavDataUrl = (durationSec = 3) => {
+    const sampleRate = 8000;
+    const numSamples = sampleRate * durationSec;
+    const buffer = new ArrayBuffer(44 + numSamples * 2);
+    const view = new DataView(buffer);
+    const writeStr = (offset, str) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + numSamples * 2, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, numSamples * 2, true);
+    for (let i = 0; i < numSamples; i++) {
+      const t = i / sampleRate;
+      const freq = t < 1.0 ? 440 : t < 2.0 ? 554.37 : 659.25;
+      const env = Math.sin(Math.PI * ((t % 1.0) / 1.0));
+      const sample = Math.sin(2 * Math.PI * freq * t) * env * 0.35;
+      view.setInt16(44 + i * 2, sample * 32767, true);
     }
-  });
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return 'data:audio/wav;base64,' + btoa(binary);
+  };
 
-  // Envoi d'une note vocale chiffrée
+  const stopVoiceRecorderStream = () => {
+    if (state.voiceRecorder.timerInterval) {
+      clearInterval(state.voiceRecorder.timerInterval);
+      state.voiceRecorder.timerInterval = null;
+    }
+    if (state.voiceRecorder.stream) {
+      state.voiceRecorder.stream.getTracks().forEach((t) => t.stop());
+      state.voiceRecorder.stream = null;
+    }
+    state.voiceRecorder.mediaRecorder = null;
+    state.voiceRecorder.chunks = [];
+    document.getElementById('voiceRecorderBar').classList.add('hidden');
+  };
+
+  // Clic sur le bouton Microphone 🎙️ : démarre l'enregistrement vocal en direct
   document.getElementById('voiceNoteBtn').addEventListener('click', async () => {
     if (!state.activeRoomId) return;
+    const recBar = document.getElementById('voiceRecorderBar');
+    if (!recBar.classList.contains('hidden')) {
+      return;
+    }
+
+    state.voiceRecorder.chunks = [];
+    state.voiceRecorder.startedAt = Date.now();
+    state.voiceRecorder.isFallbackMode = false;
+
+    const updateRecTimer = () => {
+      const sec = Math.max(0, Math.floor((Date.now() - state.voiceRecorder.startedAt) / 1000));
+      const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+      const ss = String(sec % 60).padStart(2, '0');
+      document.getElementById('voiceRecTimer').textContent = `${mm}:${ss}`;
+    };
+
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('API Microphone non disponible');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.voiceRecorder.stream = stream;
+      const recorder = new MediaRecorder(stream);
+      state.voiceRecorder.mediaRecorder = recorder;
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) state.voiceRecorder.chunks.push(ev.data);
+      };
+      recorder.start();
+      document.getElementById('voiceRecStatusText').textContent = '🎙️ Enregistrement micro en direct...';
+    } catch {
+      // Si l'ordinateur n'a pas de micro branché ou permission refusée : mode enregistrement simulé sans blocage
+      state.voiceRecorder.isFallbackMode = true;
+      document.getElementById('voiceRecStatusText').textContent =
+        '🎙️ Enregistrement vocal (mode synthèse locale — aucun micro détecté)...';
+    }
+
+    updateRecTimer();
+    state.voiceRecorder.timerInterval = setInterval(updateRecTimer, 500);
+    recBar.classList.remove('hidden');
+  });
+
+  // Annuler l'enregistrement vocal
+  document.getElementById('cancelVoiceBtn').addEventListener('click', () => {
+    if (state.voiceRecorder.mediaRecorder && state.voiceRecorder.mediaRecorder.state !== 'inactive') {
+      state.voiceRecorder.mediaRecorder.stop();
+    }
+    stopVoiceRecorderStream();
+  });
+
+  // Valider, chiffrer (AES-256-GCM) et envoyer le message vocal enregistré
+  document.getElementById('sendVoiceBtn').addEventListener('click', async () => {
+    if (!state.activeRoomId) return;
+    const durationSec = Math.max(1, Math.round((Date.now() - state.voiceRecorder.startedAt) / 1000));
     const phrases = {
-      fr: 'Note vocale : Merci de prendre connaissance du dossier transmis.',
+      fr: 'Note vocale de service enregistrée et chiffrée de bout en bout.',
       mos: 'Koɛɛga : Ne y zabr fãa, bɩ y ges sebrã tõnd sẽn tʋmã.',
       dyu: 'Kumakan : Aw ni baara, aw ye sɛbɛn cilen lajɛ.',
-      ff: 'Daande : On jaaraama, ƴeewon الdossier neldaaɗo oo.',
+      ff: 'Daande : On jaaraama, ƴeewon dossier neldaaɗo oo.',
     };
-    const voiceSummary = phrases[state.lang] || phrases.fr;
+    const customText = document.getElementById('messageInput').value.trim();
+    const voiceSummary = customText || phrases[state.lang] || phrases.fr;
+
+    let audioDataUrl = null;
+    if (!state.voiceRecorder.isFallbackMode && state.voiceRecorder.mediaRecorder) {
+      audioDataUrl = await new Promise((resolve) => {
+        const rec = state.voiceRecorder.mediaRecorder;
+        rec.onstop = async () => {
+          const blob = new Blob(state.voiceRecorder.chunks, { type: rec.mimeType || 'audio/webm' });
+          const dataUrl = await readFileAsDataUrl(blob);
+          resolve(dataUrl);
+        };
+        if (rec.state !== 'inactive') {
+          rec.stop();
+        } else {
+          resolve(generateFallbackWavDataUrl(Math.min(durationSec, 5)));
+        }
+      });
+    } else {
+      audioDataUrl = generateFallbackWavDataUrl(Math.min(durationSec, 5));
+    }
+
+    stopVoiceRecorderStream();
+
     try {
       await sendEncryptedMessageToRoom(state.activeRoomId, {
         text: voiceSummary,
         voiceSummary,
+        audioDataUrl,
+        voiceDurationSec: durationSec,
         isVoice: true,
         classification: document.getElementById('classificationSelect').value,
+        ttlSec: Number(document.getElementById('ttlSelect').value || 0),
+        isInstruction: document.getElementById('isInstructionCheckbox').checked,
       });
+      document.getElementById('messageInput').value = '';
+      state.lastRenderSignature = '';
       await renderRoomMessages(state.activeRoomId, true);
     } catch (err) {
       alert(err.message);
