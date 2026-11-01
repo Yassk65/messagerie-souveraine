@@ -1,92 +1,97 @@
-# Messagerie Souveraine de l'Administration — « FasoSouverain »
+# FasoSouverain — Messagerie de l’administration
 
-Hackathon 226 – Édition 2026 (MTDPCE / DGTD) · Sprint technique pré-hackathon  
-**Équipe** : _FasoSouverain (à compléter avec vos noms)_ · **Université** : _Université du Burkina Faso (à compléter)_
+Interface responsive intégrée à partir des six maquettes Stitch fournies : connexion, messages, annuaire, console de sécurité, actions critiques et discussion mobile.
 
----
+Le navigateur utilise **matrix-js-sdk et son moteur Rust/WASM** pour Olm/Megolm. Synapse stocke les événements chiffrés et les médias dans PostgreSQL et son volume média. Le portail Node sert les fichiers compilés par Vite, assure le TOTP, les habilitations et une passerelle Matrix authentifiée. Toutes les ressources visuelles sont locales.
 
-## 1. Concept
-Messagerie instantanée souveraine (messages, groupes ministériels, notes vocales et fichiers) destinée aux agents publics du Burkina Faso, **hébergeable sur l'infrastructure de l'État en une seule commande**, chiffrée de bout en bout (E2EE), strictement fermée aux intrus (aucune inscription publique, aucune fédération externe) et fonctionnant **sans aucun service tiers**.
+## Démarrer en démonstration (PowerShell)
 
----
-
-## 2. Architecture et Socle de Sécurité
-```
-Agents Publics (Portail Web Souverain :3000 / Element Web :8080)
-   │  Chiffrement E2EE local (Matrix Olm/Megolm + WebCrypto AES-256-GCM)
-   │  Authentification Forte : Mot de passe (12+ car.) + 2e Facteur TOTP (RFC 6238)
-   ▼
-Portail Souverain & Serveur Matrix Synapse (:8008) ──> PostgreSQL 16
-   └─ Ne stocke que des évènements chiffrés (m.room.encrypted) — 0 message en clair
-```
-
-- **Chiffrement de bout en bout (E2EE)** : Protocole **Matrix (Olm en 1:1 / Megolm en groupe)** et API standard **WebCrypto (`AES-256-GCM`)**. Chiffrement forcé par défaut pour tous les salons (`encryption_enabled_by_default_for_room_type: all`) et rejet strict de tout évènement en clair (`m.room.message`). Aucune cryptographie maison.
-- **Identité vérifiée, 2FA & Rôles (RBAC)** : Inscriptions publiques fermées (`enable_registration: false`). Enrôlement exclusif par l'administrateur (`ADMIN_SG`). Authentification forte à **2 facteurs (Mot de passe + Code TOTP à 6 chiffres RFC 6238)** et gestion de 3 rôles :
-  - `ADMIN_SG` (Administrateur Sécurité DGTD/SG) : enrôlement, révocation immédiate, gestion des canaux officiels.
-  - `DIRECTEUR` (Directeur / Chef de service) : émission d'Instructions de Service et de messages `CONFIDENTIEL`.
-  - `AGENT_PUBLIC` (Agent assermenté) : échanges en niveau `NORMAL` et `DIFFUSION_RESTREINTE`, accusés de réception.
-- **Révocation immédiate** : Via l'interface d'administration en 1 clic ou via `./scripts/revoke.sh`, le compte d'un agent est immédiatement désactivé, ses jetons d'accès sont détruits (`HTTP 401` instantané), il est retiré de tous les salons et la clé de groupe Megolm est renouvelée.
-- **Minimisation des métadonnées** : Présence en ligne désactivée (`presence: false`), adresses IP purgées après 24h (`user_ips_max_age: 1d`), pas d'aperçu d'URL (`url_preview_enabled: false`), notifications sans contenu, fédération coupée. Le serveur voit uniquement qui est membre d'un salon et l'horodatage de transit des paquets chiffrés (voir [docs/NOTE_SECURITE.md](docs/NOTE_SECURITE.md)).
-
----
-
-## 3. Fonctionnalités Innovantes pour l'Administration Burkinabè
-1. **Niveaux de Classification des Messages (`NORMAL`, `DIFFUSION_RESTREINTE`, `CONFIDENTIEL`)** : Blocage de la copie/transfert sur les messages classifiés, bandeau anti-capture et **expiration automatique (TTL)** (ex: 30s, 5 min, 1h).
-2. **Instructions de Service avec Accusé de Lecture à Valeur Probante** : Les Directeurs peuvent émettre une instruction officielle exigeant un accusé de lecture horodaté et signé cryptographiquement (**HMAC-SHA256**) par chaque agent avec son matricule.
-3. **Annuaire Officiel par Ministère et Fonction** : Répertoire filtrable par ministère (`MTDPCE`, `MEFP`, `MATDS`, `MS`, `SGG-CM`), direction, titre et statut d'habilitation temps-réel.
-4. **Interface et Notes Vocales en Langues Nationales (Bonus +3 pts)** : Bascule instantanée de l'interface en **Français, Mooré, Dioula (Julakan) et Fulfuldé**, avec envoi de notes vocales chiffrées de bout en bout.
-5. **Bouton d'Urgence (Panic Wipe)** : En cas de perte ou de menace sur le terrain, efface immédiatement les clés cryptographiques en mémoire/stockage local et révoque toutes les sessions de l'agent.
-
----
-
-## 4. Technologies Utilisées et Licences Open Source
-| Composant | Rôle | Licence OSI | Lien du projet |
-|---|---|---|---|
-| **Synapse** (`v1.118.0`) | Serveur Matrix E2EE | AGPL-3.0 | https://github.com/element-hq/synapse |
-| **Element Web** (`v1.11.86`) | Client Matrix de référence | AGPL-3.0 / GPL-3.0 | https://github.com/element-hq/element-web |
-| **PostgreSQL** (`16-alpine`) | Base de données | PostgreSQL License | https://www.postgresql.org |
-| **Node.js** (`22-alpine`) | Portail Souverain (2FA, RBAC, Innovations) & Tests | MIT License | https://nodejs.org |
-| **FasoSouverain** (ce dépôt) | Portail, configuration, scripts et documentation | **AGPL-3.0** (`LICENSE`) | Ce dépôt |
-
-**Niveau d'engagement open source : Étendre et adapter** (à partir de Synapse et d'Element).
-
----
-
-## 5. Installation et Démarrage Rapide
-
-### Option A — Déploiement complet en UNE commande (Docker Compose)
-```bash
+```powershell
+$env:DEMO_MODE = 'true'
 docker compose up -d --build
-./scripts/demo_accounts.sh      # crée les comptes fictifs dans Synapse
-```
-- **Portail & Messagerie Souveraine (2FA, Rôles, Innovations, Langues nationales)** : http://localhost:3000
-- **Client Element Web** : http://localhost:8080 · **Serveur Synapse** : http://localhost:8008
-
-### Option B — Démarrage direct du Portail Souverain & Suite de Tests (sans Docker requis)
-```bash
-node portal/src/server.js       # lance le portail sur http://localhost:3000
-node --test tests/security.test.js   # exécute les 6 tests automatisés de sécurité (Bonus +2 pts)
 ```
 
----
+Ouvrir [FasoSouverain](http://localhost:3000). Dans « Comptes fictifs de démonstration », choisir `admin`, `aminata.ouedraogo`, `ibrahim.sawadogo` ou `fatoumata.kabore`. Mot de passe : `Demo-Fictif-2026!`.
 
-## 6. Comptes de Démonstration (100 % Fictifs) et Vérifications pour le Jury
-Mot de passe de démonstration : `Demo-Fictif-2026!` (le code **2FA TOTP à 6 chiffres** temps-réel est affiché sur la console d'aide du portail pour faciliter les tests du jury) :
-- `admin` (`ADMIN_SG` — Commandant Ousmane Traoré, MTDPCE/DGTD)
-- `aminata.ouedraogo` (`DIRECTEUR` — Directrice des Infrastructures, MTDPCE)
-- `ibrahim.sawadogo` (`AGENT_PUBLIC` — Inspecteur du Trésor, MEFP)
-- `fatoumata.kabore` (`AGENT_PUBLIC` — Chargée des Opérations, MATDS)
+L’environnement local livré utilise `.env` pour isoler la démo vierge dans les volumes `messagerie-souveraine_demo_*` et `data/demo/`. Les données des tests restent dans les volumes précédents et `data/synapse/`. Les variables optionnelles `POSTGRES_VOLUME`, `PORTAL_VOLUME`, `BOOTSTRAP_VOLUME`, `SYNAPSE_DATA_DIR` et `ELEMENT_DATA_DIR` sélectionnent cet ensemble cohérent de données ; ne pas mélanger leurs sauvegardes.
 
-**Commandes de vérification en direct pour l'entretien du jury :**
-```bash
-node --test tests/security.test.js              # vérifie 2FA, anti-intrus, serveur aveugle, RBAC et révocation
-./scripts/check_server_blind.sh                 # vérifie qu'il y a 0 message en clair dans PostgreSQL
-ADMIN_PASSWORD='Demo-Fictif-2026!' ./scripts/revoke.sh fatoumata.kabore   # révocation immédiate en CLI
+À la première connexion, scanner le QR avec FreeOTP, Aegis ou une application TOTP, puis saisir le code à six chiffres. Il n’existe pas de code TOTP public de contournement. Le QR ne réapparaît pas après validation.
+
+Les comptes sont créés automatiquement et les connexions répétées disposent de limites spécifiques à la démonstration. Aucun contenu de conversation fictif n’est injecté. Démarrer une conversation depuis l’annuaire, ou créer un canal avec le bouton de composition.
+
+## Installation hors démonstration
+
+Copier `.env.example` en `.env`, garder `DEMO_MODE=false`, définir `BOOTSTRAP_ADMIN_PASSWORD` (12 caractères minimum) et remplacer les mots de passe PostgreSQL. Employer des secrets alphanumériques pour les valeurs injectées dans la configuration et les URL PostgreSQL.
+
+```powershell
+docker compose up -d --build
 ```
 
----
+Un seul agent `admin` est créé à la première initialisation. Il configure son TOTP puis enrôle les autres agents dans la console de sécurité. Le registre persistant ne recharge pas les comptes fictifs quand le mode démo est désactivé. Désactiver le mode démo ne supprime pas les comptes déjà créés : révoquer les comptes fictifs ou utiliser une installation distincte pour une exploitation réelle.
 
-## 7. Limites Connues et Documents du Dossier
-- Le serveur ne lit aucun message mais voit les métadonnées de routage minimales (membres d'un salon, horodatage).
-- En production, placer un reverse-proxy HTTPS (TLS 1.3) devant les services et restreindre `/_synapse/admin` au réseau d'administration.
-- Documents complets dans `docs/` : [Note de Pré-Projet (2 pages)](docs/NOTE_PRE_PROJET.md) et [Note de Sécurité (2 pages)](docs/NOTE_SECURITE.md).
+Seul `127.0.0.1:3000` est publié. Synapse, ses API d’administration et les bases ne sont pas exposés sur l’hôte. L’ancien client Element n’est plus utilisé, car son accès direct contournerait les contrôles du portail. Lors d’une mise à niveau de l’ancien Compose, arrêter l’ancien service Element.
+
+Pour une installation distante, placer un reverse-proxy HTTPS devant le portail, adapter le bind du port à l’architecture choisie, définir `COOKIE_SECURE=true` et `PUBLIC_BASEURL=https://votre-domaine/matrix`. Conserver les chemins `/api/` et `/matrix/`, autoriser les requêtes de synchronisation de 40 secondes et les téléversements de 15 Mo. Ne pas exposer Synapse directement. Ne pas changer `SERVER_NAME` après initialisation.
+
+## Utilisation
+
+- **Annuaire** : échanges directs au sein du ministère ; demande et acceptation obligatoires entre administrations.
+- **Messages** : synchronisation Matrix, salons chiffrés, fichiers jusqu’à 14 Mo, notes vocales jusqu’à trois minutes. Le microphone nécessite HTTPS ou localhost et l’autorisation du navigateur.
+- **Instructions** : réservées aux directeurs et administrateurs ; le destinataire peut enregistrer un accusé HMAC horodaté. Ce reçu est authentifié par le serveur, sans prétendre à une signature personnelle non répudiable.
+- **Récupération** : dans les détails cryptographiques, activer la sauvegarde, confirmer le mot de passe si demandé, puis conserver la clé affichée hors de l’appareil. Sur un nouveau navigateur, utiliser « Restaurer les clés ». Les appareils peuvent aussi être vérifiés par comparaison de codes dans « Sécurité ».
+- **Sécurité** : enrôlement, révocation et journal global réservés à `ADMIN_SG`. Chaque agent peut consulter ses propres appareils.
+- **Urgence** : confirmation explicite avant désactivation du compte et suppression des clés locales. Une purge hors connexion ne confirme pas la révocation serveur. Les sauvegardes chiffrées et les copies déjà déchiffrées ailleurs ne sont pas effacées.
+
+L’expiration masque les messages dans ce client ; elle ne constitue pas une suppression irréversible de toutes les copies serveur ou destinataires. La sélection de texte est limitée dans l’interface pour les messages classifiés, sans pouvoir empêcher les captures d’écran. Les noms des salons, participants, classifications, échéances et horodatages restent des métadonnées de routage visibles.
+
+## Développement et vérification
+
+Node.js 22 est utilisé dans Docker. En local :
+
+```powershell
+cd portal
+npm ci
+npm run build
+npm test
+```
+
+Pour modifier l’interface avec rechargement automatique : `npm run dev`. Les chemins API sont relayés vers le portail Docker sur le port 3000. Un navigateur ne peut ouvrir simultanément le même stockage cryptographique d’appareil dans plusieurs onglets.
+
+Tests navigateur complets contre une installation locale de démonstration (Microsoft Edge installé) :
+
+```powershell
+node tests/e2e.cjs
+```
+
+Pour inclure récupération, comparaison SAS, enrôlement, révocation, purge et redémarrage des services :
+
+```powershell
+$env:FASO_EXTENDED = 'true'
+$env:FASO_TEST_RESTART = 'true'
+node tests/e2e.cjs
+Get-Content -Raw tests/synapse-live.cjs | docker compose exec -T portal node
+```
+
+Les captures et les secrets des comptes fictifs nécessaires aux répétitions sont conservés dans `data/e2e/`, exclu de Git. Ne pas utiliser ce script contre des comptes réels. Les tests unitaires injectent explicitement le moteur en mémoire ; aucun simulateur n’est utilisé au démarrage normal. Synapse indisponible produit une erreur visible.
+
+Les tests navigateur valident et scellent le TOTP des comptes utilisés. Ils doivent être exécutés sur un environnement de test : pour les répéter, le script réutilise les secrets fictifs du fichier associé à l’instance dans `data/e2e/`. La démo livrée après validation reste disponible pour un premier enrôlement par son utilisateur.
+
+Le script `scripts/check_server_blind.sh` inspecte les types d’événements réellement stockés. Pour révoquer en CLI après configuration du TOTP administrateur :
+
+```sh
+ADMIN_PASSWORD='votre-mot-de-passe' ADMIN_TOTP=123456 ./scripts/revoke.sh identifiant
+```
+
+## Persistance, sauvegardes et mise à niveau
+
+La base dédiée `portal-db` contient un registre versionné chiffré AES-256-GCM : agents, secrets TOTP, demandes, accusés, audit, correspondances des salons et sessions serveur. Un verrou PostgreSQL impose une seule instance du portail. Les mutations sont sérialisées et enregistrées avant l’envoi d’une réponse de succès. Les intentions d’enrôlement et de révocation sont enregistrées pour reprise au démarrage.
+
+Sauvegarder ensemble, avec les services arrêtés ou une méthode de snapshot cohérente :
+
+- PostgreSQL Synapse (`pgdata`) et PostgreSQL portail (`portaldata`), idéalement par `pg_dump` ;
+- `data/synapse/`, notamment les médias et la clé de signature Synapse ;
+- le volume `bootstrap`, qui contient les secrets de chiffrement du registre et le compte de service.
+
+Restaurer les bases et les volumes correspondants avant de redémarrer. La perte de `portal-storage-key` rend le registre illisible. La clé de récupération des agents reste distincte de ces secrets. Aucune migration de l’historique du simulateur n’est effectuée. La migration SQL `001_registry.sql` initialise la version 1 du registre de manière idempotente.
+
+Licence AGPL-3.0-only. Matrix JS SDK, moteur Rust, bibliothèque de chiffrement des pièces jointes et polices conservent leurs licences distribuées avec leurs paquets.

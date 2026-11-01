@@ -18,6 +18,7 @@ const { generateBase32Secret, generateTOTP, verifyTOTP } = require('../portal/sr
 const { createSignedReceipt, verifySignedReceipt } = require('../portal/src/receipts');
 const { createNodeDPoPClientIdentity } = require('../portal/src/dpop');
 const { SovereignPortalApp } = require('../portal/src/server');
+const { EmbeddedMatrixEngine } = require('../portal/src/matrix_engine');
 
 // Code que FreeOTP afficherait sur le téléphone de l'agent (secret connu uniquement de l'agent)
 function otpFor(app, localpart) {
@@ -40,7 +41,7 @@ test('1. Second facteur TOTP (RFC 6238) : génération, validation et rejet d’
 });
 
 test('2. Épreuve Jury « Intrus » : un compte non enrôlé est immédiatement rejeté (HTTP 403)', async () => {
-  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf' });
+  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf', matrix: new EmbeddedMatrixEngine('faso.gov.bf') });
 
   const res = await app.dispatchTestRequest('POST', '/api/auth/login-step1', {
     body: { username: 'intrus.non.enrole', password: 'Demo-Fictif-2026!' },
@@ -52,7 +53,7 @@ test('2. Épreuve Jury « Intrus » : un compte non enrôlé est immédiatement 
 });
 
 test('3. Authentification complète 2FA + Épreuve « Le serveur ne lit rien » (0 message en clair)', async () => {
-  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf' });
+  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf', matrix: new EmbeddedMatrixEngine('faso.gov.bf') });
 
   // Étape 1 : Mot de passe pour aminata.ouedraogo (Directrice)
   const step1Res = await app.dispatchTestRequest('POST', '/api/auth/login-step1', {
@@ -126,7 +127,7 @@ test('3. Authentification complète 2FA + Épreuve « Le serveur ne lit rien » 
 });
 
 test('4. Contrôle des Rôles (RBAC) : un Agent standard ne peut pas envoyer en niveau CONFIDENTIEL', async () => {
-  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf' });
+  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf', matrix: new EmbeddedMatrixEngine('faso.gov.bf') });
 
   // Connexion de ibrahim.sawadogo (AGENT_PUBLIC)
   const s1 = await (
@@ -161,7 +162,7 @@ test('4. Contrôle des Rôles (RBAC) : un Agent standard ne peut pas envoyer en 
 });
 
 test('5. Épreuve Jury « Révocation immédiate » : un agent révoqué perd immédiatement son accès', async () => {
-  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf' });
+  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf', matrix: new EmbeddedMatrixEngine('faso.gov.bf') });
 
   // 1. Connexion de fatoumata.kabore
   const f1 = await (
@@ -232,7 +233,7 @@ test('6. Accusé de lecture à valeur probante : signature HMAC-SHA256 et détec
 });
 
 test('7. Cloisonnement inter-administrations et 2FA par courriel gouvernemental (.gov.bf)', async () => {
-  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf' });
+  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf', matrix: new EmbeddedMatrixEngine('faso.gov.bf') });
 
   // Connexion de Aminata (MTDPCE) + vérification que le mail 2FA est bien délivré dans la boîte .gov.bf
   const a1 = await (
@@ -322,7 +323,7 @@ test('7. Cloisonnement inter-administrations et 2FA par courriel gouvernemental 
 });
 
 test('8. Sécurité Niveau NASA (DPoP RFC 9449 + Cookie HttpOnly + Anti-Rejeu) : blocage des tokens/cookies volés', async () => {
-  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf' });
+  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf', matrix: new EmbeddedMatrixEngine('faso.gov.bf') });
   const dpopClient = createNodeDPoPClientIdentity();
 
   // 1. Connexion d'Aminata avec liaison matérielle DPoP ECDSA P-256 + Cookie HttpOnly
@@ -388,7 +389,7 @@ test('8. Sécurité Niveau NASA (DPoP RFC 9449 + Cookie HttpOnly + Anti-Rejeu) :
 });
 
 test('9. Enrôlement Admin Zero-Knowledge : l’admin enregistre l’agent sans générer sa clé 2FA, l’agent la génère lui-même à sa 1ère connexion', async () => {
-  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf' });
+  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf', matrix: new EmbeddedMatrixEngine('faso.gov.bf') });
 
   // 1. Connexion de l'administrateur
   const adm1 = await (

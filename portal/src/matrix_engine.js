@@ -1,13 +1,9 @@
 /**
- * Simulateur et Client d'interfaçage Matrix Synapse (API Client-Server v3 & Admin v1/v2).
+ * Double de test en mémoire, injecté explicitement par les tests unitaires.
  *
  * Explication pour le jury :
- * - En production (Docker Compose) : communique directement avec le serveur Synapse (http://synapse:8008)
- *   où seuls les évènements chiffrés `m.room.encrypted` (algorithmes `m.megolm.v1.aes-sha2` et
- *   `m.olm.v1.curve25519-aes-sha2`) sont stockés dans PostgreSQL.
- * - En mode test local (sans Docker) : fournit un moteur compatible avec l'API Matrix Client-Server v3
- *   qui applique strictement les mêmes règles : refus des messages en clair (`m.room.message` rejeté),
- *   stockage exclusif de `m.room.encrypted`, et révocation immédiate des jetons et salons.
+ * Aucun appel réseau ni chiffrement réel ici. Le serveur normal utilise SynapseEngine.
+ * Le refus du clair, les appartenances et la révocation sont reproduits pour les tests.
  */
 const crypto = require('crypto');
 

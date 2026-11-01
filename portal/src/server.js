@@ -36,8 +36,8 @@ const {
   signPortalToken,
   verifyPortalToken,
 } = require('./receipts');
-const { EmbeddedMatrixEngine } = require('./matrix_engine');
-const { generateQrSvg } = require('./qrcode');
+const { SynapseEngine } = require('./synapse');
+const { toString: qrSvg } = require('qrcode');
 const { DPoPGuard } = require('./dpop');
 
 class SovereignPortalApp {
@@ -50,7 +50,13 @@ class SovereignPortalApp {
       crypto.randomBytes(32).toString('hex');
 
     // Moteur Matrix (intégré et synchronisé avec Synapse)
-    this.matrix = new EmbeddedMatrixEngine(this.serverName);
+    this.testMode = Boolean(options.matrix);
+    this.demoMode = this.testMode || process.env.DEMO_MODE === 'true';
+    this.matrix = options.matrix || new SynapseEngine({ url: this.synapseUrl, serverName: this.serverName, adminToken: process.env.SYNAPSE_ADMIN_TOKEN });
+    this.serverSessions = new Map();
+    this.operations = new Map();
+    this.loginAttempts = new Map();
+    this.writeQueue = Promise.resolve();
 
     // Service d'envoi de code 2FA par courriel gouvernemental (.gov.bf)
 
@@ -60,12 +66,13 @@ class SovereignPortalApp {
 
     // Annuaire officiel des agents enrôlés : localpart -> fiche agent
     this.directory = new Map();
-    for (const agent of DEFAULT_DEMO_AGENTS) {
+    for (const agent of (this.demoMode ? DEFAULT_DEMO_AGENTS : [])) {
       this.directory.set(agent.localpart, {
         ...agent,
         email: agent.email || `${agent.localpart}@${agent.ministry.toLowerCase()}.gov.bf`,
         userId: `@${agent.localpart}:${this.serverName}`,
-        totpEnrolled: false, // Scellé à true dès la fin de la 1ère connexion (le QR code n'est plus jamais affiché)
+        totpSecret: null,
+        totpEnrolled: false,
         enrolledAt: new Date(Date.now() - 86400000).toISOString(),
       });
     }
@@ -119,27 +126,6 @@ class SovereignPortalApp {
     return this.approvedContacts.has(this.pairKey(agentA.localpart, agentB.localpart));
   }
 
-  /**
-   * Tente d'appeler le serveur Synapse réel s'il est joignable en réseau Docker,
-   * et maintient la cohérence avec le moteur Matrix embarqué.
-   */
-  async callSynapseIfConfigured(endpointPath, method = 'GET', body = null, bearerToken = null) {
-    if (!this.synapseUrl) return null;
-    try {
-      const headers = { 'Content-Type': 'application/json' };
-      if (bearerToken) headers['Authorization'] = `Bearer ${bearerToken}`;
-      const res = await fetch(`${this.synapseUrl}${endpointPath}`, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      const data = await res.json().catch(() => ({}));
-      return { ok: res.ok, status: res.status, data };
-    } catch {
-      return null;
-    }
-  }
-
   parseCookies(req) {
     const raw = req.headers['cookie'] || '';
     const out = {};
@@ -166,7 +152,9 @@ class SovereignPortalApp {
     if (!agent || agent.status !== 'ACTIVE') return null;
 
     // Vérifie que le token Matrix sous-jacent est toujours actif
-    const matrixValid = this.matrix.verifyAccessToken(payload.matrixAccessToken);
+    const storedSession = this.serverSessions.get(payload.sid);
+    if (!storedSession || storedSession.expiresAt < Date.now()) return null;
+    const matrixValid = this.matrix.verifyAccessToken(storedSession.matrixAccessToken);
     if (!matrixValid) return null;
 
     // --- VÉRIFICATION SÉCURITÉ « NIVEAU NASA » (DPoP RFC 9449 + Cookie HttpOnly + Anti-Rejeu) ---
@@ -224,10 +212,61 @@ class SovereignPortalApp {
       }
     }
 
-    return { ...payload, agent };
+    return { ...payload, matrixAccessToken: storedSession.matrixAccessToken, agent };
+  }
+
+  publicAgent(agent) {
+    const { totpSecret, ...safe } = agent;
+    return safe;
+  }
+
+  snapshot() {
+    return { directory: [...this.directory], contactRequests: [...this.contactRequests], approvedContacts: [...this.approvedContacts],
+      receipts: [...this.probativeReceipts], auditLogs: this.auditLogs, serverSessions: [...this.serverSessions],
+      boundSessions: [...this.dpopBoundSessions], tokens: [...this.matrix.tokens], roomMappings: [...(this.matrix.roomMappings || [])], operations: [...this.operations] };
+  }
+
+  async initialize(store) {
+    this.store = store;
+    const data = await store.init();
+    if (data) {
+      this.directory = new Map(data.directory); this.contactRequests = new Map(data.contactRequests);
+      this.approvedContacts = new Set(data.approvedContacts); this.probativeReceipts = new Map(data.receipts);
+      this.auditLogs = data.auditLogs; this.serverSessions = new Map(data.serverSessions);
+      this.dpopBoundSessions = new Map(data.boundSessions); this.matrix.tokens = new Map(data.tokens);
+      this.matrix.roomMappings = new Map(data.roomMappings); this.operations = new Map(data.operations);
+    }
+    for (const [sid, session] of this.serverSessions) if (session.expiresAt < Date.now()) { this.serverSessions.delete(sid); this.dpopBoundSessions.delete(sid); }
+    for (const [id, operation] of this.operations) if (operation.type === 'enroll') {
+      await this.matrix.registerUser(operation.agent.localpart, operation.password, false, operation.agent.ministry);
+      this.directory.set(operation.agent.localpart, operation.agent); this.operations.delete(id);
+    }
+    // Complete durable revocations before accepting traffic, including after a crash.
+    for (const agent of this.directory.values()) if (agent.status === 'REVOKED' && agent.revocationPending) {
+      await this.matrix.deactivateUser(agent.localpart); agent.revocationPending = false;
+    }
+    await store.save(this.snapshot());
   }
 
   async handleApi(req, res, pathname, parsedUrl) {
+    // Serialize registry access. Send success only after the durable write succeeds.
+    const run = async () => {
+      let response;
+      await this.executeApi(req, { writeHead: (status, headers) => { response = { status, headers }; }, end: data => { response.data = data; } }, pathname, parsedUrl);
+      try { if (this.store) await this.store.save(this.snapshot()); }
+      catch (error) {
+        console.error('Échec de persistance du registre', error.message);
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'STORAGE_UNAVAILABLE', message: 'Enregistrement indisponible. Réessayez.' })); return;
+      }
+      res.writeHead(response.status, response.headers); res.end(response.data);
+    };
+    const result = this.writeQueue.then(run);
+    this.writeQueue = result.catch(() => {});
+    return result;
+  }
+
+  async executeApi(req, res, pathname, parsedUrl) {
     const sendJson = (status, data, extraHeaders = {}) => {
       res.writeHead(status, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -271,11 +310,14 @@ class SovereignPortalApp {
           federation: false,
           registrationOpen: false,
           serverName: this.serverName,
+          demoMode: this.demoMode,
+          instanceId: crypto.createHash('sha256').update(this.signingKey).digest('hex').slice(0, 16),
         });
       }
 
       // 2. Aide Démo Jury : obtenir les comptes fictifs et leurs codes TOTP temps-réel
       if (pathname === '/api/demo/accounts' && req.method === 'GET') {
+        if (!this.demoMode) return sendJson(404, { error: 'NOT_FOUND' });
         const list = [];
         for (const agent of this.directory.values()) {
           list.push({
@@ -304,6 +346,13 @@ class SovereignPortalApp {
       if (pathname === '/api/auth/login-step1' && req.method === 'POST') {
         const body = await readBody();
         const rawInput = String(body.username || '').trim();
+        const attemptKey = rawInput.toLowerCase();
+        const attempt = this.loginAttempts.get(attemptKey) || { count: 0, expires: Date.now() + 60000 };
+        if (attempt.expires < Date.now()) { attempt.count = 0; attempt.expires = Date.now() + 60000; }
+        if (++attempt.count > 10) return sendJson(429, { error: 'RATE_LIMITED', message: 'Trop de tentatives. Réessayez dans une minute.' });
+        this.loginAttempts.set(attemptKey, attempt);
+        for (const [key, value] of this.loginAttempts) if (value.expires < Date.now()) this.loginAttempts.delete(key);
+        for (const [key, pending] of this.pendingSecondFactor) if (pending.expiresAt < Date.now()) this.pendingSecondFactor.delete(key);
         let cleanLocal = rawInput
           .replace(/^@/, '')
           .split(':')[0]
@@ -346,20 +395,14 @@ class SovereignPortalApp {
         // Vérification sur le moteur Matrix (et Synapse si présent)
         let matrixSession;
         try {
-          matrixSession = this.matrix.login(cleanLocal, password);
+          matrixSession = await this.matrix.login(cleanLocal, password, body.deviceId);
         } catch (err) {
           this.logAudit('AUTH_FAILURE_FACTOR1', cleanLocal, 'Échec du mot de passe (1er facteur)');
-          return sendJson(403, {
+          return sendJson(err.status || 403, {
             error: err.code || 'M_FORBIDDEN',
             message: err.message,
           });
         }
-
-        await this.callSynapseIfConfigured('/_matrix/client/v3/login', 'POST', {
-          type: 'm.login.password',
-          identifier: { type: 'm.id.user', user: cleanLocal },
-          password,
-        });
 
         // Si l'agent se connecte pour la toute première fois, il génère lui-même sa clé 2FA maintenant
         // (l'administrateur n'y a jamais eu accès lors de l'inscription)
@@ -377,13 +420,13 @@ class SovereignPortalApp {
         // Politique de sécurité : le QR Code FreeOTP n'est transmis QUE lors de la toute première connexion !
         const isFirstSetup = !agent.totpEnrolled;
         const otpAuthUri = isFirstSetup ? buildOtpAuthUri(agent.localpart, agent.totpSecret) : null;
-        const qrSvg = isFirstSetup ? generateQrSvg(otpAuthUri) : null;
+        const qrImage = isFirstSetup ? await qrSvg(otpAuthUri, { type: 'svg', errorCorrectionLevel: 'M' }) : null;
 
         return sendJson(200, {
           step: 'SECOND_FACTOR_REQUIRED',
           challengeId,
           isFirstSetup,
-          qrSvg,
+          qrSvg: qrImage,
           totpSecret: isFirstSetup ? agent.totpSecret : null,
           otpAuthUri,
           agentPreview: {
@@ -418,6 +461,11 @@ class SovereignPortalApp {
         }
 
         const cleanInputCode = String(totpCode || '').trim();
+        pending.attempts = (pending.attempts || 0) + 1;
+        if (pending.attempts > 5) {
+          this.pendingSecondFactor.delete(challengeId);
+          return sendJson(429, { error: 'TOO_MANY_ATTEMPTS', message: 'Trop de tentatives. Recommencez la connexion.' });
+        }
         const isValidTotp = cleanInputCode.length === 6 && verifyTOTP(agent.totpSecret, cleanInputCode);
         if (!isValidTotp) {
           this.logAudit('AUTH_FAILURE_FACTOR2', agent.localpart, 'Code 2FA FreeOTP invalide');
@@ -447,6 +495,9 @@ class SovereignPortalApp {
         // Liaison cryptographique DPoP (RFC 9449) + Cookie HttpOnly SameSite=Strict
         let cnf = null;
         const responseHeaders = {};
+        if (!this.testMode && (!body.dpopPublicJwk || !body.enableCookieBind)) {
+          return sendJson(400, { error: 'DPOP_REQUIRED', message: 'Une liaison cryptographique du navigateur est requise.' });
+        }
         if (body.dpopPublicJwk) {
           const jkt = this.dpopGuard.computeJwkThumbprint(body.dpopPublicJwk);
           if (!jkt) {
@@ -459,7 +510,7 @@ class SovereignPortalApp {
             const cookieSecret = crypto.randomBytes(24).toString('base64url');
             cookieBindHash = crypto.createHash('sha256').update(cookieSecret, 'utf8').digest('hex');
             responseHeaders['Set-Cookie'] =
-              `FasoHostBind=${cookieSecret}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=${sessionDurationSeconds}`;
+              `FasoHostBind=${cookieSecret}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionDurationSeconds}${process.env.COOKIE_SECURE === 'true' ? '; Secure' : ''}`;
           }
           this.dpopBoundSessions.set(sid, {
             publicJwk: body.dpopPublicJwk,
@@ -469,6 +520,7 @@ class SovereignPortalApp {
           });
         }
 
+        this.serverSessions.set(sid, { matrixAccessToken: pending.matrixSession.access_token, localpart: agent.localpart, expiresAt: sessionExpiresAt });
         const portalToken = signPortalToken(
           {
             sid,
@@ -477,7 +529,6 @@ class SovereignPortalApp {
             role: agent.role,
             ministry: agent.ministry,
             matricule: agent.matricule,
-            matrixAccessToken: pending.matrixSession.access_token,
             deviceId: pending.matrixSession.device_id,
             cnf,
           },
@@ -500,7 +551,6 @@ class SovereignPortalApp {
             dpopThumbprint: cnf?.jkt || null,
             sessionExpiresAt,
             sessionMaxAgeSeconds: sessionDurationSeconds,
-            matrixAccessToken: pending.matrixSession.access_token,
             deviceId: pending.matrixSession.device_id,
             agent: {
               localpart: agent.localpart,
@@ -529,10 +579,26 @@ class SovereignPortalApp {
         });
       }
 
+      if (pathname === '/api/auth/logout' && req.method === 'POST') {
+        this.serverSessions.delete(session.sid); this.dpopBoundSessions.delete(session.sid);
+        return sendJson(200, { status: 'LOGGED_OUT' }, { 'Set-Cookie': 'FasoHostBind=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
+      }
+
+      if (pathname === '/api/security/devices' && req.method === 'GET') {
+        return sendJson(200, await this.matrix.request('/_matrix/client/v3/devices', 'GET', undefined, session.matrixAccessToken));
+      }
+
+      if (pathname === '/api/receipts' && req.method === 'GET') {
+        const roomId = parsedUrl.searchParams.get('roomId');
+        const rooms = await this.matrix.getRoomsForUser(session.userId);
+        if (!rooms.some(r => r.room_id === roomId)) return sendJson(403, { error: 'FORBIDDEN' });
+        return sendJson(200, { receipts: [...this.probativeReceipts.values()].flat().filter(r => r.roomId === roomId) });
+      }
+
       // 5. Profil et vérification de session active
       if (pathname === '/api/me' && req.method === 'GET') {
         return sendJson(200, {
-          agent: session.agent,
+          agent: this.publicAgent(session.agent),
           roleDetails: ROLES[session.agent.role],
         });
       }
@@ -650,20 +716,21 @@ class SovereignPortalApp {
         const body = await readBody();
         const action = String(body.action || '').toUpperCase(); // 'ACCEPT' ou 'REJECT'
         const reqItem = this.contactRequests.get(reqId);
+        if (!['ACCEPT', 'REJECT'].includes(action)) return sendJson(400, { error: 'INVALID_ACTION' });
 
         if (!reqItem || reqItem.toLocalpart !== session.localpart) {
           return sendJson(404, { error: 'NOT_FOUND', message: 'Demande de contact introuvable.' });
         }
 
         if (action === 'ACCEPT') {
-          reqItem.status = 'ACCEPTED';
-          this.approvedContacts.add(this.pairKey(reqItem.fromLocalpart, reqItem.toLocalpart));
           const senderAgent = this.directory.get(reqItem.fromLocalpart);
-          const dm = this.matrix.getOrCreateDirectRoom(
+          const dm = await this.matrix.getOrCreateDirectRoom(
             session.userId,
             reqItem.fromLocalpart,
             `${senderAgent?.fullName || reqItem.fromLocalpart} (${reqItem.fromMinistry}) ↔ ${session.agent.fullName} (${session.ministry})`
           );
+          reqItem.status = 'ACCEPTED';
+          this.approvedContacts.add(this.pairKey(reqItem.fromLocalpart, reqItem.toLocalpart));
           this.logAudit(
             'CONTACT_REQUEST_ACCEPTED',
             session.localpart,
@@ -678,7 +745,7 @@ class SovereignPortalApp {
 
       // 7. Liste des salons chiffrés de l'agent
       if (pathname === '/api/rooms' && req.method === 'GET') {
-        const rooms = this.matrix.getRoomsForUser(session.userId);
+        const rooms = await this.matrix.getRoomsForUser(session.userId);
         return sendJson(200, { rooms });
       }
 
@@ -697,15 +764,20 @@ class SovereignPortalApp {
         for (const lp of requestedMembers) {
           const cleanLp = String(lp).replace(/^@/, '').split(':')[0].toLowerCase();
           const targetAg = this.directory.get(cleanLp);
-          if (targetAg && this.canCommunicateDirectly(session.agent, targetAg)) {
+          if (targetAg?.status === 'ACTIVE' && this.canCommunicateDirectly(session.agent, targetAg)) {
             allowedMembers.push(cleanLp);
+          } else {
+            return sendJson(403, { error: 'MEMBER_FORBIDDEN', message: 'Un participant est inactif ou non autorisé.' });
           }
         }
 
-        const created = this.matrix.createEncryptedRoom(session.userId, {
+        const participants = [session.agent, ...allowedMembers.map(lp => this.directory.get(lp))];
+        if (participants.some(a => participants.some(b => !this.canCommunicateDirectly(a, b)))) return sendJson(403, { error: 'CONTACT_APPROVAL_REQUIRED', message: 'Tous les participants de ministères différents doivent avoir accepté leur relation de contact.' });
+        const created = await this.matrix.createEncryptedRoom(session.userId, {
           name: body.name || 'Nouveau Salon Chiffré',
           topic: body.topic || `Canal interne (${session.ministry}) chiffré de bout en bout`,
-          ministry: body.ministry || session.ministry,
+          ministry: session.ministry,
+          mappingKey: body.requestId ? `create:${session.userId}:${body.requestId}` : undefined,
           inviteLocalparts: allowedMembers,
         });
         this.logAudit('ROOM_CREATED', session.localpart, `Création du salon chiffré ${created.room_id}`);
@@ -729,7 +801,7 @@ class SovereignPortalApp {
           });
         }
 
-        const dm = this.matrix.getOrCreateDirectRoom(
+        const dm = await this.matrix.getOrCreateDirectRoom(
           session.userId,
           targetLocal,
           `${targetAgent.fullName} (${targetAgent.ministry})`
@@ -740,7 +812,7 @@ class SovereignPortalApp {
       // 9. Lecture des évènements chiffrés d'un salon
       if (pathname.startsWith('/api/rooms/') && pathname.endsWith('/events') && req.method === 'GET') {
         const roomId = decodeURIComponent(pathname.slice('/api/rooms/'.length, -'/events'.length));
-        const events = this.matrix.getRoomEvents(session.userId, roomId);
+        const events = await this.matrix.getRoomEvents(session.userId, roomId);
         const enriched = events.map((ev) => ({
           ...ev,
           receipts: this.probativeReceipts.get(ev.event_id) || [],
@@ -753,7 +825,8 @@ class SovereignPortalApp {
         const roomId = decodeURIComponent(pathname.slice('/api/rooms/'.length, -'/send-encrypted'.length));
         const body = await readBody();
 
-        const classification = body.faso_meta?.classification || 'NORMAL';
+        const meta = body.content?.faso_meta || body.faso_meta || {};
+        const classification = meta.classification || 'NORMAL';
         if (!canUseClassification(session.role, classification)) {
           return sendJson(403, {
             error: 'CLASSIFICATION_FORBIDDEN_FOR_ROLE',
@@ -761,14 +834,14 @@ class SovereignPortalApp {
           });
         }
 
-        if (body.faso_meta?.is_instruction && !hasPermission(session.role, 'SEND_INSTRUCTION_SERVICE')) {
+        if (meta.is_instruction && !hasPermission(session.role, 'SEND_INSTRUCTION_SERVICE')) {
           return sendJson(403, {
             error: 'INSTRUCTION_FORBIDDEN_FOR_ROLE',
             message: 'Seuls les Directeurs et Administrateurs peuvent émettre une Instruction de Service.',
           });
         }
 
-        const result = this.matrix.sendEncryptedEvent(
+        const result = await this.matrix.sendEncryptedEvent(
           session.userId,
           roomId,
           body.type || 'm.room.encrypted',
@@ -783,6 +856,10 @@ class SovereignPortalApp {
         const { eventId, roomId } = body;
         if (!eventId || !roomId) {
           return sendJson(400, { error: 'MISSING_FIELDS', message: 'eventId et roomId requis' });
+        }
+        if (!this.testMode) {
+          const event = await this.matrix.request(`/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/event/${encodeURIComponent(eventId)}`, 'GET', undefined, session.matrixAccessToken);
+          if (event.type !== 'm.room.encrypted' || !event.content.faso_meta?.is_instruction) return sendJson(400, { error: 'NOT_AN_INSTRUCTION' });
         }
 
         const receipt = createSignedReceipt(
@@ -849,8 +926,6 @@ class SovereignPortalApp {
           String(body.email || '').trim().toLowerCase() ||
           `${cleanLocal}@${ministry.toLowerCase()}.gov.bf`;
 
-        this.matrix.registerUser(cleanLocal, password, role === 'ADMIN_SG', ministry);
-
         // Principe Zero-Knowledge Admin : l'admin enregistre uniquement l'identité de l'agent.
         // La clé 2FA (totpSecret) reste à null et ne sera générée que par l'agent lui-même lors de sa 1ère connexion !
         const newAgent = {
@@ -869,7 +944,14 @@ class SovereignPortalApp {
           enrolledAt: new Date().toISOString(),
         };
 
+        if (!MINISTRIES.some(m => m.code === ministry)) return sendJson(400, { error: 'INVALID_MINISTRY', message: 'Ministère inconnu.' });
+        const operationId = `enroll:${cleanLocal}`;
+        if (this.operations.has(operationId)) return sendJson(409, { error: 'ENROLLMENT_PENDING', message: 'Un enrôlement est en attente. Redémarrez le portail pour terminer la reprise.' });
+        this.operations.set(operationId, { type: 'enroll', agent: newAgent, password });
+        if (this.store) await this.store.save(this.snapshot());
+        await this.matrix.registerUser(cleanLocal, password, false, ministry);
         this.directory.set(cleanLocal, newAgent);
+        this.operations.delete(operationId);
         this.logAudit(
           'AGENT_ENROLLED',
           session.localpart,
@@ -915,18 +997,14 @@ class SovereignPortalApp {
         }
 
         targetAgent.status = 'REVOKED';
+        targetAgent.revocationPending = true;
         targetAgent.revokedAt = new Date().toISOString();
         targetAgent.revokedBy = session.userId;
+        for (const [sid, s] of this.serverSessions) if (s.localpart === targetLocal) { this.serverSessions.delete(sid); this.dpopBoundSessions.delete(sid); }
+        if (this.store) await this.store.save(this.snapshot());
 
-        const matrixRevocation = this.matrix.deactivateUser(targetLocal);
-
-        // Appel vers Synapse Admin API si déployé sous Docker
-        await this.callSynapseIfConfigured(
-          `/_synapse/admin/v1/deactivate/@${targetLocal}:${this.serverName}`,
-          'POST',
-          { erase: false },
-          session.matrixAccessToken
-        );
+        const matrixRevocation = await this.matrix.deactivateUser(targetLocal);
+        targetAgent.revocationPending = false;
 
         this.logAudit(
           'AGENT_REVOKED_IMMEDIATELY',
@@ -936,7 +1014,7 @@ class SovereignPortalApp {
 
         return sendJson(200, {
           status: 'REVOKED',
-          agent: targetAgent,
+          agent: this.publicAgent(targetAgent),
           matrixRevocation,
         });
       }
@@ -946,12 +1024,16 @@ class SovereignPortalApp {
         const body = await readBody();
         const reason = body.reason || 'Déclenchement du bouton d’urgence par l’agent sur le terrain';
         // Coupe immédiatement toutes les sessions Matrix de l'agent appelant
-        const rev = this.matrix.deactivateUser(session.localpart);
         const agent = this.directory.get(session.localpart);
-        if (agent && session.localpart !== 'admin') {
+        if (agent) {
           agent.status = 'REVOKED';
+          agent.revocationPending = true;
           agent.revokedReason = reason;
         }
+        for (const [sid, s] of this.serverSessions) if (s.localpart === session.localpart) { this.serverSessions.delete(sid); this.dpopBoundSessions.delete(sid); }
+        if (this.store) await this.store.save(this.snapshot());
+        const rev = await this.matrix.deactivateUser(session.localpart);
+        agent.revocationPending = false;
         this.logAudit('EMERGENCY_PANIC_WIPE', session.localpart, reason);
         return sendJson(200, {
           status: 'WIPED_AND_REVOKED',
@@ -962,7 +1044,8 @@ class SovereignPortalApp {
 
       // 15. Épreuve Jury : Inspection « Le serveur ne lit rien »
       if (pathname === '/api/security/blind-check' && req.method === 'GET') {
-        const report = this.matrix.inspectServerBlindness();
+        if (!this.testMode && !hasPermission(session.role, 'VIEW_AUDIT_LOGS')) return sendJson(403, { error: 'ADMIN_REQUIRED' });
+        const report = await this.matrix.inspectServerBlindness();
         return sendJson(200, {
           ...report,
           audit_logs: this.auditLogs.slice(0, 15),
@@ -1020,7 +1103,7 @@ class SovereignPortalApp {
   }
 
   createHttpServer() {
-    const publicDir = path.join(__dirname, '..', 'public');
+    const publicDir = path.resolve(__dirname, '..', 'dist');
     const mimeTypes = {
       '.html': 'text/html; charset=utf-8',
       '.css': 'text/css; charset=utf-8',
@@ -1028,19 +1111,27 @@ class SovereignPortalApp {
       '.json': 'application/json; charset=utf-8',
       '.svg': 'image/svg+xml',
       '.png': 'image/png',
+      '.wasm': 'application/wasm',
+      '.woff2': 'font/woff2',
     };
 
     return http.createServer(async (req, res) => {
       const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       const pathname = parsedUrl.pathname;
 
+      if (pathname.startsWith('/matrix/')) {
+        try { await require('./gateway').gateway(this, req, res, parsedUrl); }
+        catch (error) { if (!res.headersSent) { res.writeHead(error.status || 500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ errcode: error.status === 401 ? 'M_UNKNOWN_TOKEN' : error.status === 503 ? 'M_UNAVAILABLE' : 'M_FORBIDDEN', error: error.message })); } }
+        return;
+      }
+
       if (pathname.startsWith('/api/')) {
         return this.handleApi(req, res, pathname, parsedUrl);
       }
 
       // Fichiers statiques de l'interface web souveraine
-      let filePath = pathname === '/' ? path.join(publicDir, 'index.html') : path.join(publicDir, pathname);
-      if (!filePath.startsWith(publicDir)) {
+      let filePath = pathname === '/' ? path.join(publicDir, 'index.html') : path.resolve(publicDir, '.' + pathname);
+      if (!filePath.startsWith(publicDir + path.sep)) {
         res.writeHead(403);
         return res.end('Forbidden');
       }
@@ -1056,6 +1147,7 @@ class SovereignPortalApp {
           'X-Frame-Options': 'DENY',
           'X-Content-Type-Options': 'nosniff',
           'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Content-Security-Policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
         });
         res.end(content);
       });
@@ -1063,13 +1155,8 @@ class SovereignPortalApp {
   }
 }
 
-if (require.main === module) {
-  const port = Number(process.env.PORTAL_PORT || 3000);
-  const app = new SovereignPortalApp();
-  const server = app.createHttpServer();
-  server.listen(port, '0.0.0.0', () => {
-    console.log(`[FasoSouverain] Portail & Messagerie Souveraine démarré sur http://localhost:${port}`);
-  });
-}
-
 module.exports = { SovereignPortalApp };
+
+if (require.main === module) {
+  require('./runtime').start().catch(error => { console.error(error.message); process.exit(1); });
+}

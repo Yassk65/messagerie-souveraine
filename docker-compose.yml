@@ -1,7 +1,4 @@
-# Messagerie souveraine de l'administration - déploiement en UNE commande :
-#   docker compose up -d
 name: messagerie-souveraine
-
 services:
   db:
     image: postgres:16-alpine
@@ -14,65 +11,77 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U synapse -d synapse"]
+      test: [CMD-SHELL, "pg_isready -U synapse -d synapse"]
       interval: 5s
-      timeout: 5s
-      retries: 10
-
-  # Génère homeserver.yaml, config Element, secrets et clé de signature (une seule fois)
+      retries: 30
+  portal-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: portal
+      POSTGRES_PASSWORD: ${PORTAL_DB_PASSWORD:-portal_dev_only}
+      POSTGRES_DB: portal
+    volumes:
+      - portaldata:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U portal -d portal"]
+      interval: 5s
+      retries: 30
   init:
     image: ghcr.io/element-hq/synapse:v1.118.0
-    restart: "no"
-    entrypoint: ["/bin/sh", "/init.sh"]
+    entrypoint: [/bin/sh, /init.sh]
     environment:
       SERVER_NAME: ${SERVER_NAME:-localhost}
-      PUBLIC_BASEURL: ${PUBLIC_BASEURL:-http://localhost:8008}
+      PUBLIC_BASEURL: ${PUBLIC_BASEURL:-http://localhost:3000/matrix}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_dev_only}
+      DEMO_MODE: ${DEMO_MODE:-false}
     volumes:
       - ./config:/templates:ro
       - ./config/init.sh:/init.sh:ro
-      - ./data/synapse:/data
-      - ./data/element:/element
-
+      - ${SYNAPSE_DATA_DIR:-./data/synapse}:/data
+      - ${ELEMENT_DATA_DIR:-./data/element}:/element
+      - bootstrap:/bootstrap
   synapse:
     image: ghcr.io/element-hq/synapse:v1.118.0
     restart: unless-stopped
     depends_on:
-      db:
-        condition: service_healthy
-      init:
-        condition: service_completed_successfully
+      db: { condition: service_healthy }
+      init: { condition: service_completed_successfully }
     environment:
       SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+      PYTHONPATH: /modules
     volumes:
-      - ./data/synapse:/data
-    ports:
-      - "8008:8008"
-
-  element:
-    image: vectorim/element-web:v1.11.86
-    restart: unless-stopped
-    depends_on:
-      init:
-        condition: service_completed_successfully
-    volumes:
-      - ./data/element/config.json:/app/config.json:ro
-    ports:
-      - "8080:80"
-
-  # Portail & Client Souverain Burkinabè (2FA TOTP, RBAC, Révocation, Classification, Mooré/Dioula/Fulfuldé)
+      - ${SYNAPSE_DATA_DIR:-./data/synapse}:/data
+      - ./config/secure_rooms.py:/modules/secure_rooms.py:ro
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8008/health')"]
+      interval: 5s
+      start_period: 120s
+      retries: 30
   portal:
     build: ./portal
     restart: unless-stopped
     depends_on:
-      - synapse
+      synapse: { condition: service_healthy }
+      portal-db: { condition: service_healthy }
     environment:
       PORTAL_PORT: 3000
       SERVER_NAME: ${SERVER_NAME:-localhost}
       SYNAPSE_INTERNAL_URL: http://synapse:8008
+      DATABASE_URL: postgresql://portal:${PORTAL_DB_PASSWORD:-portal_dev_only}@portal-db:5432/portal
+      SYNAPSE_AUDIT_DATABASE_URL: postgresql://synapse:${POSTGRES_PASSWORD:-changeme_dev_only}@db:5432/synapse
+      DEMO_MODE: ${DEMO_MODE:-false}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-Demo-Fictif-2026!}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    volumes:
+      - bootstrap:/run/bootstrap:ro
     ports:
-      - "3000:3000"
-
+      - 127.0.0.1:3000:3000
 volumes:
   pgdata:
+    name: ${POSTGRES_VOLUME:-messagerie-souveraine_pgdata}
+  portaldata:
+    name: ${PORTAL_VOLUME:-messagerie-souveraine_portaldata}
+  bootstrap:
+    name: ${BOOTSTRAP_VOLUME:-messagerie-souveraine_bootstrap}

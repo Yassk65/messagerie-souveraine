@@ -40,6 +40,11 @@ password_config:
 
 # --- Chiffrement de bout en bout forcé (Olm/Megolm) pour tous les types de salons ---
 encryption_enabled_by_default_for_room_type: all
+modules:
+  - module: secure_rooms.SecureRooms
+    config: {}
+enable_set_displayname: false
+enable_set_avatar_url: false
 
 # --- Souveraineté : aucun appel vers un service tiers, pas de fédération ---
 federation_domain_whitelist: []

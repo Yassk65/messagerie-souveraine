@@ -13,6 +13,17 @@ if [ ! -f "$SECRETS" ]; then
 fi
 . "$SECRETS"
 
+mkdir -p /bootstrap
+printf '%s' "$REG_SECRET" > /bootstrap/registration-secret
+for name in service-password portal-signing-key portal-storage-key; do
+  if [ ! -f "/bootstrap/$name" ]; then
+    python -c 'import secrets;print(secrets.token_hex(32))' > "/bootstrap/$name"
+  fi
+done
+chown -R 1000:1000 /bootstrap
+chmod 700 /bootstrap
+chmod 600 /bootstrap/*
+
 render() {
   sed -e "s|__SERVER_NAME__|${SERVER_NAME}|g" \
       -e "s|__PUBLIC_BASEURL__|${PUBLIC_BASEURL}|g" \
@@ -24,6 +35,16 @@ render() {
 }
 
 render /templates/homeserver.yaml.tpl /data/homeserver.yaml
+if [ "${DEMO_MODE:-false}" = "true" ]; then
+  cat >> /data/homeserver.yaml <<'DEMO'
+
+# Explicit demo-only limits for repeatable local acceptance tests.
+rc_login:
+  address: { per_second: 2, burst_count: 30 }
+  account: { per_second: 2, burst_count: 30 }
+  failed_attempts: { per_second: 0.5, burst_count: 10 }
+DEMO
+fi
 render /templates/element-config.json.tpl /element/config.json
 cp /templates/log.config /data/log.config
 
