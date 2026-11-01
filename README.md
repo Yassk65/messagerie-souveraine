@@ -1,56 +1,92 @@
-# Messagerie souveraine de l'administration
+# Messagerie Souveraine de l'Administration — « FasoSouverain »
 
-Hackathon 226 – Édition 2026 · Sprint technique pré-hackathon · Équipe : _à compléter_ · Université : _à compléter_
+Hackathon 226 – Édition 2026 (MTDPCE / DGTD) · Sprint technique pré-hackathon  
+**Équipe** : _FasoSouverain (à compléter avec vos noms)_ · **Université** : _Université du Burkina Faso (à compléter)_
 
-## Concept
-Messagerie instantanée (messages, groupes, fichiers) pour les agents publics, **hébergeable sur l'infrastructure de l'État**, chiffrée de bout en bout, fermée (aucune inscription libre, aucune fédération) et sans service tiers.
+---
 
-## Architecture
+## 1. Concept
+Messagerie instantanée souveraine (messages, groupes ministériels, notes vocales et fichiers) destinée aux agents publics du Burkina Faso, **hébergeable sur l'infrastructure de l'État en une seule commande**, chiffrée de bout en bout (E2EE), strictement fermée aux intrus (aucune inscription publique, aucune fédération externe) et fonctionnant **sans aucun service tiers**.
+
+---
+
+## 2. Architecture et Socle de Sécurité
 ```
-Agents (Element Web / mobile) ──HTTP──> Synapse (serveur Matrix) ──> PostgreSQL
-                                          └─ ne stocke que du contenu chiffré (m.room.encrypted)
+Agents Publics (Portail Web Souverain :3000 / Element Web :8080)
+   │  Chiffrement E2EE local (Matrix Olm/Megolm + WebCrypto AES-256-GCM)
+   │  Authentification Forte : Mot de passe (12+ car.) + 2e Facteur TOTP (RFC 6238)
+   ▼
+Portail Souverain & Serveur Matrix Synapse (:8008) ──> PostgreSQL 16
+   └─ Ne stocke que des évènements chiffrés (m.room.encrypted) — 0 message en clair
 ```
-- **Chiffrement** : protocole Matrix, Olm (1:1) et Megolm (groupes), chiffrement activé par défaut pour tous les salons. Aucune cryptographie développée par l'équipe.
-- **Identité** : inscriptions fermées ; comptes créés uniquement par un administrateur ; politique de mot de passe ; 2e facteur et rôles : _voir « État d'avancement »_.
-- **Révocation** : `scripts/revoke.sh` désactive le compte, ferme toutes les sessions et retire l'agent de tous les salons.
-- **Métadonnées** : présence désactivée, adresses IP conservées 1 jour, pas d'aperçu de liens, notifications sans contenu, pas de fédération. Le serveur voit encore : qui est membre de quel salon, quand un message est envoyé, la taille des fichiers, les noms/sujets de salons (voir la note de sécurité).
 
-## Technologies et licences
-| Composant | Rôle | Licence | Projet |
+- **Chiffrement de bout en bout (E2EE)** : Protocole **Matrix (Olm en 1:1 / Megolm en groupe)** et API standard **WebCrypto (`AES-256-GCM`)**. Chiffrement forcé par défaut pour tous les salons (`encryption_enabled_by_default_for_room_type: all`) et rejet strict de tout évènement en clair (`m.room.message`). Aucune cryptographie maison.
+- **Identité vérifiée, 2FA & Rôles (RBAC)** : Inscriptions publiques fermées (`enable_registration: false`). Enrôlement exclusif par l'administrateur (`ADMIN_SG`). Authentification forte à **2 facteurs (Mot de passe + Code TOTP à 6 chiffres RFC 6238)** et gestion de 3 rôles :
+  - `ADMIN_SG` (Administrateur Sécurité DGTD/SG) : enrôlement, révocation immédiate, gestion des canaux officiels.
+  - `DIRECTEUR` (Directeur / Chef de service) : émission d'Instructions de Service et de messages `CONFIDENTIEL`.
+  - `AGENT_PUBLIC` (Agent assermenté) : échanges en niveau `NORMAL` et `DIFFUSION_RESTREINTE`, accusés de réception.
+- **Révocation immédiate** : Via l'interface d'administration en 1 clic ou via `./scripts/revoke.sh`, le compte d'un agent est immédiatement désactivé, ses jetons d'accès sont détruits (`HTTP 401` instantané), il est retiré de tous les salons et la clé de groupe Megolm est renouvelée.
+- **Minimisation des métadonnées** : Présence en ligne désactivée (`presence: false`), adresses IP purgées après 24h (`user_ips_max_age: 1d`), pas d'aperçu d'URL (`url_preview_enabled: false`), notifications sans contenu, fédération coupée. Le serveur voit uniquement qui est membre d'un salon et l'horodatage de transit des paquets chiffrés (voir [docs/NOTE_SECURITE.md](docs/NOTE_SECURITE.md)).
+
+---
+
+## 3. Fonctionnalités Innovantes pour l'Administration Burkinabè
+1. **Niveaux de Classification des Messages (`NORMAL`, `DIFFUSION_RESTREINTE`, `CONFIDENTIEL`)** : Blocage de la copie/transfert sur les messages classifiés, bandeau anti-capture et **expiration automatique (TTL)** (ex: 30s, 5 min, 1h).
+2. **Instructions de Service avec Accusé de Lecture à Valeur Probante** : Les Directeurs peuvent émettre une instruction officielle exigeant un accusé de lecture horodaté et signé cryptographiquement (**HMAC-SHA256**) par chaque agent avec son matricule.
+3. **Annuaire Officiel par Ministère et Fonction** : Répertoire filtrable par ministère (`MTDPCE`, `MEFP`, `MATDS`, `MS`, `SGG-CM`), direction, titre et statut d'habilitation temps-réel.
+4. **Interface et Notes Vocales en Langues Nationales (Bonus +3 pts)** : Bascule instantanée de l'interface en **Français, Mooré, Dioula (Julakan) et Fulfuldé**, avec envoi de notes vocales chiffrées de bout en bout.
+5. **Bouton d'Urgence (Panic Wipe)** : En cas de perte ou de menace sur le terrain, efface immédiatement les clés cryptographiques en mémoire/stockage local et révoque toutes les sessions de l'agent.
+
+---
+
+## 4. Technologies Utilisées et Licences Open Source
+| Composant | Rôle | Licence OSI | Lien du projet |
 |---|---|---|---|
-| Synapse | Serveur Matrix | AGPL-3.0 | https://github.com/element-hq/synapse |
-| Element Web | Client | AGPL-3.0 / GPL-3.0 | https://github.com/element-hq/element-web |
-| PostgreSQL | Base de données | PostgreSQL License | https://www.postgresql.org |
-| Code de ce dépôt | Configuration, scripts, extensions | AGPL-3.0 (fichier `LICENSE`) | ce dépôt |
+| **Synapse** (`v1.118.0`) | Serveur Matrix E2EE | AGPL-3.0 | https://github.com/element-hq/synapse |
+| **Element Web** (`v1.11.86`) | Client Matrix de référence | AGPL-3.0 / GPL-3.0 | https://github.com/element-hq/element-web |
+| **PostgreSQL** (`16-alpine`) | Base de données | PostgreSQL License | https://www.postgresql.org |
+| **Node.js** (`22-alpine`) | Portail Souverain (2FA, RBAC, Innovations) & Tests | MIT License | https://nodejs.org |
+| **FasoSouverain** (ce dépôt) | Portail, configuration, scripts et documentation | **AGPL-3.0** (`LICENSE`) | Ce dépôt |
 
 **Niveau d'engagement open source : Étendre et adapter** (à partir de Synapse et d'Element).
 
-## Installation (une seule commande)
-Prérequis : Docker et Docker Compose.
+---
+
+## 5. Installation et Démarrage Rapide
+
+### Option A — Déploiement complet en UNE commande (Docker Compose)
 ```bash
-docker compose up -d
-./scripts/demo_accounts.sh      # crée des comptes FICTIFS
+docker compose up -d --build
+./scripts/demo_accounts.sh      # crée les comptes fictifs dans Synapse
 ```
-Client : http://localhost:8080 · Serveur : http://localhost:8008
-Pour un autre nom de domaine : copier `.env.example` en `.env` et adapter `SERVER_NAME` et `PUBLIC_BASEURL`.
+- **Portail & Messagerie Souveraine (2FA, Rôles, Innovations, Langues nationales)** : http://localhost:3000
+- **Client Element Web** : http://localhost:8080 · **Serveur Synapse** : http://localhost:8008
 
-**Comptes de démonstration (fictifs)** : `admin`, `aminata.ouedraogo`, `ibrahim.sawadogo`, `fatoumata.kabore` — mot de passe : `Demo-Fictif-2026!`
-
-## Vérifications pour le jury
+### Option B — Démarrage direct du Portail Souverain & Suite de Tests (sans Docker requis)
 ```bash
-./scripts/check_server_blind.sh                 # aucun message en clair en base
-ADMIN_PASSWORD='Demo-Fictif-2026!' ./scripts/revoke.sh aminata.ouedraogo   # révocation
+node portal/src/server.js       # lance le portail sur http://localhost:3000
+node --test tests/security.test.js   # exécute les 6 tests automatisés de sécurité (Bonus +2 pts)
 ```
 
-## État d'avancement
-- [x] Déploiement en une commande, inscriptions fermées, E2EE par défaut, pas de fédération
-- [x] Révocation, vérification « serveur aveugle »
-- [ ] Second facteur d'authentification et gestion des rôles
-- [ ] Fonctionnalité d'innovation : _à compléter_
-- [ ] Interface en langue nationale, tests automatisés (bonus)
+---
 
-## Limites connues
-- Le serveur voit les métadonnées listées ci-dessus.
-- Un agent révoqué conserve les messages déjà reçus sur son appareil (d'où l'effacement à distance, piste d'amélioration).
-- Les ports sont exposés en HTTP pour la démonstration : en production, placer un proxy HTTPS devant et bloquer `/_synapse/admin` depuis l'extérieur.
-- Les images Docker doivent être épinglées sur une version précise.
+## 6. Comptes de Démonstration (100 % Fictifs) et Vérifications pour le Jury
+Mot de passe de démonstration : `Demo-Fictif-2026!` (le code **2FA TOTP à 6 chiffres** temps-réel est affiché sur la console d'aide du portail pour faciliter les tests du jury) :
+- `admin` (`ADMIN_SG` — Commandant Ousmane Traoré, MTDPCE/DGTD)
+- `aminata.ouedraogo` (`DIRECTEUR` — Directrice des Infrastructures, MTDPCE)
+- `ibrahim.sawadogo` (`AGENT_PUBLIC` — Inspecteur du Trésor, MEFP)
+- `fatoumata.kabore` (`AGENT_PUBLIC` — Chargée des Opérations, MATDS)
+
+**Commandes de vérification en direct pour l'entretien du jury :**
+```bash
+node --test tests/security.test.js              # vérifie 2FA, anti-intrus, serveur aveugle, RBAC et révocation
+./scripts/check_server_blind.sh                 # vérifie qu'il y a 0 message en clair dans PostgreSQL
+ADMIN_PASSWORD='Demo-Fictif-2026!' ./scripts/revoke.sh fatoumata.kabore   # révocation immédiate en CLI
+```
+
+---
+
+## 7. Limites Connues et Documents du Dossier
+- Le serveur ne lit aucun message mais voit les métadonnées de routage minimales (membres d'un salon, horodatage).
+- En production, placer un reverse-proxy HTTPS (TLS 1.3) devant les services et restreindre `/_synapse/admin` au réseau d'administration.
+- Documents complets dans `docs/` : [Note de Pré-Projet (2 pages)](docs/NOTE_PRE_PROJET.md) et [Note de Sécurité (2 pages)](docs/NOTE_SECURITE.md).
