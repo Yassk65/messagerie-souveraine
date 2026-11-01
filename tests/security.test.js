@@ -16,6 +16,7 @@ const assert = require('node:assert/strict');
 
 const { generateBase32Secret, generateTOTP, verifyTOTP } = require('../portal/src/totp');
 const { createSignedReceipt, verifySignedReceipt } = require('../portal/src/receipts');
+const { createNodeDPoPClientIdentity } = require('../portal/src/dpop');
 const { SovereignPortalApp } = require('../portal/src/server');
 
 test('1. Second facteur TOTP (RFC 6238) : génération, validation et rejet d’un code erroné', () => {
@@ -314,4 +315,71 @@ test('7. Cloisonnement inter-administrations et 2FA par courriel gouvernemental 
   });
   assert.equal(crossMinAllowed.status, 200);
 });
+
+test('8. Sécurité Niveau NASA (DPoP RFC 9449 + Cookie HttpOnly + Anti-Rejeu) : blocage des tokens/cookies volés', async () => {
+  const app = new SovereignPortalApp({ serverName: 'faso.gov.bf' });
+  const dpopClient = createNodeDPoPClientIdentity();
+
+  // 1. Connexion d'Aminata avec liaison matérielle DPoP ECDSA P-256 + Cookie HttpOnly
+  const step1 = await (
+    await app.dispatchTestRequest('POST', '/api/auth/login-step1', {
+      headers: { 'User-Agent': 'FasoBrowser/1.0' },
+      body: { username: 'aminata.ouedraogo', password: 'Demo-Fictif-2026!' },
+    })
+  ).json();
+
+  const step2Res = await app.dispatchTestRequest('POST', '/api/auth/login-step2', {
+    headers: { 'User-Agent': 'FasoBrowser/1.0' },
+    body: {
+      challengeId: step1.challengeId,
+      totpCode: step1.demoTotpHint,
+      dpopPublicJwk: dpopClient.publicJwk,
+      enableCookieBind: true,
+    },
+  });
+  assert.equal(step2Res.status, 200);
+  const step2Data = await step2Res.json();
+  assert.equal(step2Data.dpopBound, true);
+
+  const setCookieHeader = step2Res.headers['Set-Cookie'] || '';
+  assert.ok(setCookieHeader.includes('HttpOnly') && setCookieHeader.includes('SameSite=Strict'));
+  const cookiePair = setCookieHeader.split(';')[0];
+
+  // 2. Appel légitime avec Token + Cookie HttpOnly + Preuve DPoP signée ECDSA P-256 -> SUCCÈS (200)
+  const validProof = dpopClient.signRequest('GET', '/api/rooms');
+  const legitimateCall = await app.dispatchTestRequest('GET', '/api/rooms', {
+    headers: {
+      Authorization: `Bearer ${step2Data.portalToken}`,
+      Cookie: cookiePair,
+      'X-Faso-DPoP': validProof,
+      'User-Agent': 'FasoBrowser/1.0',
+    },
+  });
+  assert.equal(legitimateCall.status, 200);
+
+  // 3. ATTAQUE 1 : Un pirate vole le Bearer Token et le Cookie mais n'a pas la clé privée non-extractible -> REJET (401)
+  const attackerKey = createNodeDPoPClientIdentity();
+  const forgedProof = attackerKey.signRequest('GET', '/api/rooms');
+  const stolenTokenAttempt = await app.dispatchTestRequest('GET', '/api/rooms', {
+    headers: {
+      Authorization: `Bearer ${step2Data.portalToken}`,
+      Cookie: cookiePair,
+      'X-Faso-DPoP': forgedProof,
+      'User-Agent': 'FasoBrowser/1.0',
+    },
+  });
+  assert.equal(stolenTokenAttempt.status, 401, 'Un token volé sans la clé privée matérielle doit être rejeté');
+
+  // 4. ATTAQUE 2 : Un pirate intercepte la requête légitime et tente de la REJOUER (Replay Attack) -> REJET & DESTRUCTION SESSION (401)
+  const replayAttempt = await app.dispatchTestRequest('GET', '/api/rooms', {
+    headers: {
+      Authorization: `Bearer ${step2Data.portalToken}`,
+      Cookie: cookiePair,
+      'X-Faso-DPoP': validProof, // Même preuve rejouée !
+      'User-Agent': 'FasoBrowser/1.0',
+    },
+  });
+  assert.equal(replayAttempt.status, 401, 'Toute attaque par rejeu (même jti) doit être bloquée immédiatement');
+});
+
 

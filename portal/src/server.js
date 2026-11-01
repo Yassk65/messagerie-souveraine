@@ -39,6 +39,7 @@ const {
 const { EmbeddedMatrixEngine } = require('./matrix_engine');
 const { SovereignEmail2FAService } = require('./mailer');
 const { generateQrSvg } = require('./qrcode');
+const { DPoPGuard } = require('./dpop');
 
 class SovereignPortalApp {
   constructor(options = {}) {
@@ -54,6 +55,10 @@ class SovereignPortalApp {
 
     // Service d'envoi de code 2FA par courriel gouvernemental (.gov.bf)
     this.mailer = new SovereignEmail2FAService();
+
+    // Protection DPoP (RFC 9449) & Anti-Rejeu (empêche l'utilisation d'un cookie/token volé)
+    this.dpopGuard = new DPoPGuard();
+    this.dpopBoundSessions = new Map(); // sessionId -> { publicJwk, jkt, cookieBindHash, ctxHash }
 
     // Annuaire officiel des agents enrôlés : localpart -> fiche agent
     this.directory = new Map();
@@ -137,7 +142,21 @@ class SovereignPortalApp {
     }
   }
 
-  authenticateRequest(req) {
+  parseCookies(req) {
+    const raw = req.headers['cookie'] || '';
+    const out = {};
+    for (const part of raw.split(';')) {
+      const idx = part.indexOf('=');
+      if (idx > -1) {
+        const k = part.slice(0, idx).trim();
+        const v = part.slice(idx + 1).trim();
+        out[k] = v;
+      }
+    }
+    return out;
+  }
+
+  authenticateRequest(req, pathname = '') {
     const authHeader = req.headers['authorization'] || '';
     if (!authHeader.startsWith('Bearer ')) return null;
     const token = authHeader.slice(7).trim();
@@ -152,15 +171,73 @@ class SovereignPortalApp {
     const matrixValid = this.matrix.verifyAccessToken(payload.matrixAccessToken);
     if (!matrixValid) return null;
 
+    // --- VÉRIFICATION SÉCURITÉ « NIVEAU NASA » (DPoP RFC 9449 + Cookie HttpOnly + Anti-Rejeu) ---
+    if (payload.cnf && payload.cnf.jkt && payload.sid) {
+      const bound = this.dpopBoundSessions.get(payload.sid);
+      if (!bound) return null;
+
+      // 1. Vérifie le cookie HttpOnly __Host-FasoBind (si envoyé par un navigateur)
+      if (bound.cookieBindHash) {
+        const cookies = this.parseCookies(req);
+        const cookieSecret = cookies['FasoHostBind'] || '';
+        const actualHash = crypto.createHash('sha256').update(cookieSecret, 'utf8').digest('hex');
+        if (!cookieSecret || actualHash !== bound.cookieBindHash) {
+          this.logAudit(
+            'TOKEN_THEFT_BLOCKED_COOKIE_MISMATCH',
+            payload.localpart,
+            'Tentative d’utilisation d’un Bearer Token volé sans le Cookie matériel HttpOnly correspondant !'
+          );
+          return null;
+        }
+      }
+
+      // 2. Vérifie l'empreinte de contexte (User-Agent)
+      const currentCtx = this.dpopGuard.computeClientContextHash(req);
+      if (bound.ctxHash && currentCtx !== bound.ctxHash) {
+        this.logAudit(
+          'TOKEN_THEFT_BLOCKED_CONTEXT_MISMATCH',
+          payload.localpart,
+          'Tentative d’utilisation d’une session depuis un navigateur/outil différent !'
+        );
+        return null;
+      }
+
+      // 3. Vérifie la signature cryptographique ECDSA P-256 à usage unique (x-faso-dpop)
+      const dpopHeader = req.headers['x-faso-dpop'] || '';
+      const dpopCheck = this.dpopGuard.verifyDPoPProof({
+        dpopHeader,
+        expectedPublicJwk: bound.publicJwk,
+        expectedThumbprint: payload.cnf.jkt,
+        method: req.method,
+        pathname,
+      });
+
+      if (!dpopCheck.valid) {
+        this.logAudit(
+          'DPOP_ATTACK_BLOCKED',
+          payload.localpart,
+          `Requête API bloquée par DPoP (${dpopCheck.reason}) sur ${req.method} ${pathname}`
+        );
+        // En cas d'attaque par rejeu détectée, détruit immédiatement la session !
+        if (dpopCheck.replayDetected) {
+          this.dpopBoundSessions.delete(payload.sid);
+        }
+        return null;
+      }
+    }
+
     return { ...payload, agent };
   }
 
   async handleApi(req, res, pathname, parsedUrl) {
-    const sendJson = (status, data) => {
+    const sendJson = (status, data, extraHeaders = {}) => {
       res.writeHead(status, {
         'Content-Type': 'application/json; charset=utf-8',
         'X-Content-Type-Options': 'nosniff',
-        'Cache-Control': 'no-store',
+        'X-Frame-Options': 'DENY',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none';",
+        ...extraHeaders,
       });
       res.end(JSON.stringify(data));
     };
@@ -391,8 +468,36 @@ class SovereignPortalApp {
         // Session strictement limitée à 30 minutes (1800 secondes)
         const sessionDurationSeconds = 1800;
         const sessionExpiresAt = Date.now() + sessionDurationSeconds * 1000;
+        const sid = `sid_${crypto.randomBytes(12).toString('hex')}`;
+
+        // Liaison cryptographique DPoP (RFC 9449) + Cookie HttpOnly SameSite=Strict
+        let cnf = null;
+        const responseHeaders = {};
+        if (body.dpopPublicJwk) {
+          const jkt = this.dpopGuard.computeJwkThumbprint(body.dpopPublicJwk);
+          if (!jkt) {
+            return sendJson(400, { error: 'INVALID_DPOP_KEY', message: 'Clé publique DPoP ECDSA P-256 invalide.' });
+          }
+          cnf = { jkt };
+          const useCookieBind = Boolean(body.enableCookieBind);
+          let cookieBindHash = null;
+          if (useCookieBind) {
+            const cookieSecret = crypto.randomBytes(24).toString('base64url');
+            cookieBindHash = crypto.createHash('sha256').update(cookieSecret, 'utf8').digest('hex');
+            responseHeaders['Set-Cookie'] =
+              `FasoHostBind=${cookieSecret}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=${sessionDurationSeconds}`;
+          }
+          this.dpopBoundSessions.set(sid, {
+            publicJwk: body.dpopPublicJwk,
+            jkt,
+            cookieBindHash,
+            ctxHash: this.dpopGuard.computeClientContextHash(req),
+          });
+        }
+
         const portalToken = signPortalToken(
           {
+            sid,
             localpart: agent.localpart,
             userId: agent.userId,
             role: agent.role,
@@ -400,6 +505,7 @@ class SovereignPortalApp {
             matricule: agent.matricule,
             matrixAccessToken: pending.matrixSession.access_token,
             deviceId: pending.matrixSession.device_id,
+            cnf,
           },
           this.signingKey,
           sessionDurationSeconds
@@ -408,37 +514,44 @@ class SovereignPortalApp {
         this.logAudit(
           'AUTH_SUCCESS_2FA',
           agent.localpart,
-          `Authentification forte réussie (Mot de passe + FreeOTP) — Expiration auto dans 30 min`
+          `Authentification forte réussie (Mot de passe + FreeOTP${cnf ? ' + DPoP ECDSA P-256' : ''}) — Expiration auto dans 30 min`
         );
 
-        return sendJson(200, {
-          status: 'AUTHENTICATED',
-          portalToken,
-          sessionExpiresAt,
-          sessionMaxAgeSeconds: sessionDurationSeconds,
-          matrixAccessToken: pending.matrixSession.access_token,
-          deviceId: pending.matrixSession.device_id,
-          agent: {
-            localpart: agent.localpart,
-            userId: agent.userId,
-            fullName: agent.fullName,
-            matricule: agent.matricule,
-            ministry: agent.ministry,
-            direction: agent.direction,
-            title: agent.title,
-            role: agent.role,
-            roleLabel: ROLES[agent.role]?.label,
-            permissions: ROLES[agent.role]?.permissions || [],
+        return sendJson(
+          200,
+          {
+            status: 'AUTHENTICATED',
+            portalToken,
+            dpopBound: Boolean(cnf),
+            dpopThumbprint: cnf?.jkt || null,
+            sessionExpiresAt,
+            sessionMaxAgeSeconds: sessionDurationSeconds,
+            matrixAccessToken: pending.matrixSession.access_token,
+            deviceId: pending.matrixSession.device_id,
+            agent: {
+              localpart: agent.localpart,
+              userId: agent.userId,
+              fullName: agent.fullName,
+              matricule: agent.matricule,
+              ministry: agent.ministry,
+              direction: agent.direction,
+              title: agent.title,
+              role: agent.role,
+              roleLabel: ROLES[agent.role]?.label,
+              permissions: ROLES[agent.role]?.permissions || [],
+            },
           },
-        });
+          responseHeaders
+        );
       }
 
-      // --- ROUTES PROTÉGÉES PAR JETON 2FA ---
-      const session = this.authenticateRequest(req);
+      // --- ROUTES PROTÉGÉES PAR JETON 2FA + PREUVE DE POSSESSION DPoP ---
+      const session = this.authenticateRequest(req, pathname);
       if (!session) {
         return sendJson(401, {
           error: 'SESSION_INVALID_OR_REVOKED',
-          message: 'Session expirée ou compte révoqué immédiatement par l’administration.',
+          message:
+            'Accès refusé : Session expirée, compte révoqué, ou tentative d’utilisation d’un jeton volé sans signature matérielle DPoP.',
         });
       }
 
@@ -908,9 +1021,11 @@ class SovereignPortalApp {
     };
     let statusCode = 200;
     let rawResponse = '';
+    let responseHeaders = {};
     const res = {
-      writeHead(code) {
+      writeHead(code, hdrs = {}) {
         statusCode = code;
+        responseHeaders = hdrs;
       },
       end(chunk) {
         rawResponse = chunk || '';
@@ -919,6 +1034,7 @@ class SovereignPortalApp {
     await this.handleApi(req, res, parsedUrl.pathname, parsedUrl);
     return {
       status: statusCode,
+      headers: responseHeaders,
       json: async () => (rawResponse ? JSON.parse(rawResponse) : {}),
     };
   }

@@ -109,6 +109,8 @@ const state = {
   lang: 'fr',
   portalToken: null,
   matrixAccessToken: null,
+  dpopKeyPair: null, // Clé privée ECDSA P-256 non-extractible (extractable: false) en mémoire WebCrypto
+  dpopThumbprint: null,
   agent: null,
   rooms: [],
   activeRoomId: null,
@@ -120,6 +122,59 @@ const state = {
   directoryMap: new Map(), // userId -> fullName
   lastRenderedCount: -1,
 };
+
+function bytesToBase64Url(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Génère une paire de clés asymétriques ECDSA P-256 dans le moteur matériel du navigateur
+ * avec `extractable: false` : la clé privée ne peut JAMAIS être exportée ni volée.
+ */
+async function generateHardwareBoundDPoPKeyPair() {
+  const keyPair = await window.crypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false, // extractable = false : impossible d'exporter la clé privée !
+    ['sign', 'verify']
+  );
+  const publicJwk = await window.crypto.subtle.exportKey('jwk', keyPair.publicKey);
+  state.dpopKeyPair = keyPair;
+  return publicJwk;
+}
+
+/**
+ * Signe chaque requête API avec la clé privée non-extractible (Preuve de Possession DPoP RFC 9449).
+ */
+async function buildDPoPHeader(method, url) {
+  if (!state.dpopKeyPair) return null;
+  const parsed = new URL(url, window.location.origin);
+  const pathname = parsed.pathname;
+  const rnd = window.crypto.getRandomValues(new Uint8Array(12));
+  const jti = 'jti_' + Array.from(rnd, (b) => b.toString(16).padStart(2, '0')).join('');
+  const iat = Math.floor(Date.now() / 1000);
+  const htm = String(method || 'GET').toUpperCase();
+  const htu = pathname;
+
+  const signedPayload = `${jti}|${htm}|${htu}|${iat}`;
+  const sigBuf = await window.crypto.subtle.sign(
+    { name: 'ECDSA', hash: { name: 'SHA-256' } },
+    state.dpopKeyPair.privateKey,
+    new TextEncoder().encode(signedPayload)
+  );
+
+  const proofObj = {
+    jti,
+    htm,
+    htu,
+    iat,
+    sig: bytesToBase64Url(new Uint8Array(sigBuf)),
+  };
+  return bytesToBase64Url(new TextEncoder().encode(JSON.stringify(proofObj)));
+}
 
 // ============================================================================
 // 1. CHIFFREMENT DE BOUT EN BOUT TRANSPARENT (WEBCRYPTO AES-256-GCM / MEGOLM)
@@ -222,11 +277,21 @@ function applyLanguage(lang) {
 // ============================================================================
 
 async function apiFetch(url, options = {}) {
+  const method = (options.method || 'GET').toUpperCase();
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
   if (state.portalToken) {
     headers['Authorization'] = `Bearer ${state.portalToken}`;
+    const dpopProof = await buildDPoPHeader(method, url);
+    if (dpopProof) {
+      headers['X-Faso-DPoP'] = dpopProof;
+    }
   }
-  const res = await fetch(url, { ...options, headers });
+  const res = await fetch(url, {
+    ...options,
+    method,
+    headers,
+    credentials: 'same-origin', // Envoie automatiquement le cookie HttpOnly SameSite=Strict
+  });
   const data = await res.json().catch(() => ({}));
 
   if (res.status === 401 && state.portalToken && data.error === 'SESSION_INVALID_OR_REVOKED') {
@@ -241,6 +306,8 @@ async function apiFetch(url, options = {}) {
 
 function handleImmediateRevocationKick(reasonMsg) {
   state.roomCryptoKeys.clear();
+  state.dpopKeyPair = null;
+  state.dpopThumbprint = null;
   state.portalToken = null;
   state.matrixAccessToken = null;
   state.agent = null;
@@ -386,12 +453,21 @@ function setupAuthHandlers() {
     e.preventDefault();
     const totpCode = document.getElementById('totpInput').value.trim();
     try {
+      // Génère la paire de clés matérielle ECDSA P-256 non-extractible (DPoP RFC 9449)
+      const dpopPublicJwk = await generateHardwareBoundDPoPKeyPair();
+
       const res = await apiFetch('/api/auth/login-step2', {
         method: 'POST',
-        body: JSON.stringify({ challengeId: currentChallengeId, totpCode }),
+        body: JSON.stringify({
+          challengeId: currentChallengeId,
+          totpCode,
+          dpopPublicJwk,
+          enableCookieBind: true,
+        }),
       });
 
       state.portalToken = res.portalToken;
+      state.dpopThumbprint = res.dpopThumbprint;
       state.matrixAccessToken = res.matrixAccessToken;
       state.agent = { ...res.agent, deviceId: res.deviceId };
       state.sessionExpiresAt = res.sessionExpiresAt || Date.now() + 30 * 60 * 1000;
