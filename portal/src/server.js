@@ -227,19 +227,35 @@ class SovereignPortalApp {
       // 3. Étape 1 de Connexion : Vérification de l'enrôlement + Mot de passe Matrix
       if (pathname === '/api/auth/login-step1' && req.method === 'POST') {
         const body = await readBody();
-        const cleanLocal = String(body.username || '')
-          .trim()
+        const rawInput = String(body.username || '').trim();
+        let cleanLocal = rawInput
           .replace(/^@/, '')
           .split(':')[0]
+          .split('@')[0]
           .toLowerCase();
+
+        // Permet aussi de se connecter avec le Matricule (ex: BF-DGTD-0001) ou l'email complet
+        let agent = this.directory.get(cleanLocal);
+        if (!agent) {
+          for (const candidate of this.directory.values()) {
+            if (
+              candidate.matricule?.toLowerCase() === rawInput.toLowerCase() ||
+              candidate.email?.toLowerCase() === rawInput.toLowerCase()
+            ) {
+              agent = candidate;
+              cleanLocal = candidate.localpart;
+              break;
+            }
+          }
+        }
+
         const password = String(body.password || '');
 
-        const agent = this.directory.get(cleanLocal);
         if (!agent) {
           this.logAudit('INTRUSION_BLOCKED', cleanLocal || 'inconnu', 'Tentative de connexion par un compte non enrôlé');
           return sendJson(403, {
             error: 'INTRUS_REJETE',
-            message: `Accès rejeté : l'identifiant "${cleanLocal}" n'est pas enrôlé dans l'annuaire souverain de l'administration.`,
+            message: `Accès rejeté : l'identifiant "${rawInput}" n'est pas enrôlé dans l'annuaire souverain de l'administration.`,
           });
         }
 
@@ -269,29 +285,23 @@ class SovereignPortalApp {
           password,
         });
 
-        // Génère et envoie le code 2FA par e-mail sur la boîte gouvernementale (.gov.bf) de l'agent
-        const emailOtpCode = this.mailer.generateEmailOtpCode();
+        // Génère le code TOTP RFC 6238 hors-ligne (FreeOTP) et envoie aussi la notification locale
+        const totpCodeNow = generateTOTP(agent.totpSecret);
         const mailDelivery = await this.mailer.send2FACodeEmail({
           toEmail: agent.email,
           fullName: agent.fullName,
           matricule: agent.matricule,
           ministry: agent.ministry,
-          otpCode: emailOtpCode,
+          otpCode: totpCodeNow,
         });
 
         const challengeId = `chl_${crypto.randomBytes(16).toString('hex')}`;
         this.pendingSecondFactor.set(challengeId, {
           localpart: cleanLocal,
-          emailOtpCode,
+          emailOtpCode: totpCodeNow,
           matrixSession,
           expiresAt: Date.now() + 5 * 60 * 1000,
         });
-
-        this.logAudit(
-          '2FA_EMAIL_SENT',
-          cleanLocal,
-          `Code 2FA envoyé par courriel gouvernemental à ${agent.email}`
-        );
 
         return sendJson(200, {
           step: 'SECOND_FACTOR_REQUIRED',
@@ -307,7 +317,7 @@ class SovereignPortalApp {
             ministry: agent.ministry,
             role: agent.role,
           },
-          demoTotpHint: emailOtpCode,
+          demoTotpHint: totpCodeNow,
         });
       }
 

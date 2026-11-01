@@ -27,14 +27,14 @@
       <div id="authAlert" class="alert hidden"></div>
 
       <!-- Étape 1 : Identifiant + Mot de passe -->
-      <form id="loginStep1Form" class="auth-form">
+      <form id="loginStep1Form" class="auth-form" autocomplete="off">
         <div class="field">
           <label for="usernameInput" data-i18n="label_username">Identifiant ou Matricule Agent</label>
-          <input type="text" id="usernameInput" placeholder="prenom.nom" required autocomplete="username" />
+          <input type="text" id="usernameInput" value="admin" placeholder="ex: admin ou aminata.ouedraogo" required autocomplete="off" />
         </div>
         <div class="field">
           <label for="passwordInput" data-i18n="label_password">Mot de passe</label>
-          <input type="password" id="passwordInput" placeholder="••••••••••••" required autocomplete="current-password" />
+          <input type="password" id="passwordInput" value="Demo-Fictif-2026!" placeholder="••••••••••••" required autocomplete="new-password" />
         </div>
         <button type="submit" class="btn-primary btn-block" data-i18n="btn_step1">Continuer</button>
       </form>
