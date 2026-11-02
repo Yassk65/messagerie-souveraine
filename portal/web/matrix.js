@@ -68,7 +68,7 @@ export class SecureMessenger {
 
   rooms() { return this.client.getRooms().filter(r => r.getMyMembership() === 'join'); }
   events(roomId) { return this.client.getRoom(roomId)?.getLiveTimeline().getEvents() || []; }
-  async send(roomId, { text, file, voice, meta }) {
+  async send(roomId, { text, file, voice, durationMs, meta }) {
     let content = { msgtype: 'm.text', body: text || '', faso_meta: meta };
     if (file) {
       if (file.size > 14 * 1024 * 1024) throw new Error('Fichier trop volumineux (14 Mo maximum).');
@@ -76,8 +76,8 @@ export class SecureMessenger {
       const response = await this.transport('/matrix/_matrix/media/v3/upload', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: new Blob([encrypted.data], { type: 'application/octet-stream' }) });
       if (!response.ok) throw new Error('Téléversement du fichier chiffré impossible.');
       const uploaded = await response.json();
-      content = { ...content, msgtype: voice ? 'm.audio' : file.type.startsWith('image/') ? 'm.image' : 'm.file', body: file.name,
-        filename: file.name, info: { mimetype: file.type, size: file.size }, file: { ...encrypted.info, url: uploaded.content_uri } };
+      content = { ...content, msgtype: voice || file.type.startsWith('audio/') ? 'm.audio' : file.type.startsWith('image/') ? 'm.image' : 'm.file', body: file.name,
+        filename: file.name, info: { mimetype: file.type, size: file.size, ...(durationMs ? { duration: durationMs } : {}) }, file: { ...encrypted.info, url: uploaded.content_uri } };
     }
     const txn = 'faso_' + crypto.randomUUID();
     this.envelopes.set(txn, meta);

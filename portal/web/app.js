@@ -1,6 +1,8 @@
 import './styles.css';
 import { SecureMessenger } from './matrix';
 import { I18N } from './i18n';
+import { VoicePlayers } from './voice-player';
+const voicePlayers = new VoicePlayers();
 
 const $ = id => document.getElementById(id);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -129,7 +131,7 @@ async function enter() {
   $('profile-name').textContent = agent.fullName; $('profile-avatar').textContent = initials(agent.fullName); $('device-id').textContent = state.session.deviceId;
   const privileged = ['ADMIN_SG', 'DIRECTEUR'].includes(agent.role);
   $('classification').querySelector('[value=CONFIDENTIEL]').disabled = !privileged; $('instruction-label').classList.toggle('hidden', !privileged);
-  state.messenger?.stop();
+  voicePlayers.destroy(); state.messenger?.stop();
   state.messenger = new SecureMessenger(state.session, transport, { error, notice, ask, confirm, showKey, changed: scheduleRender, trustChanged: () => updateTrust().catch(error), connection: status => {
     const online = ['PREPARED', 'SYNCING'].includes(status); $('connection').textContent = online ? 'E2EE · CONNECTÉ' : status === 'ERROR' || status === 'RECONNECTING' ? 'RECONNEXION…' : 'SYNCHRONISATION…'; $('connection').classList.toggle('online', online);
   } });
@@ -145,7 +147,7 @@ async function enter() {
     if (state.room && state.messenger?.events(state.room).some(e => e.getContent().faso_meta?.expires_at)) { renderTimeline(); renderRooms(); }
   }), 1000);
 }
-function signOut() { clearInterval(refreshTimer); state.messenger?.stop(); state.messenger = null; state.session = null; state.room = null; sessionStorage.removeItem('faso-session'); $('workspace').classList.add('hidden'); $('auth').classList.remove('hidden'); $('back-login').click(); stopRecording(); }
+function signOut() { clearInterval(refreshTimer); voicePlayers.destroy(); state.messenger?.stop(); state.messenger = null; state.session = null; state.room = null; sessionStorage.removeItem('faso-session'); $('workspace').classList.add('hidden'); $('auth').classList.remove('hidden'); $('back-login').click(); stopRecording(); }
 $('logout').onclick = safe(async () => { await api('/api/auth/logout', {}); signOut(); });
 
 function view(name) {
@@ -177,7 +179,7 @@ function renderRooms() {
       return (e.getType() === 'm.room.message' || e.isEncrypted()) && (!expiry || expiry > Date.now());
     });
     const last = events.at(-1)?.getContent();
-    const preview = last?.faso_meta?.classification && last.faso_meta.classification !== 'NORMAL' ? 'Message classifié · ouvrir la conversation' : last?.body || (events.length ? 'Message chiffré' : 'Conversation prête à accueillir vos échanges');
+    const preview = last?.faso_meta?.classification && last.faso_meta.classification !== 'NORMAL' ? 'Message classifié · ouvrir la conversation' : last?.msgtype === 'm.audio' ? 'Message vocal' : last?.body || (events.length ? 'Message chiffré' : 'Conversation prête à accueillir vos échanges');
     return `<button class="room-item ${state.room === room.roomId ? 'active' : ''}" data-room="${escape(room.roomId)}"><span class="avatar">${escape(initials(roomTitle(room)))}</span><span class="room-meta"><strong>${escape(roomTitle(room))}</strong><small>${escape(preview)}</small></span></button>`;
   }).join('') || `<div class="empty">${icon('chat')}<h3>Aucune conversation</h3><p>Contactez un agent depuis l’annuaire ou créez un canal.</p></div>`;
   $('rooms').querySelectorAll('[data-room]').forEach(button => button.onclick = () => selectRoom(button.dataset.room));
@@ -210,17 +212,24 @@ function renderTimeline(scroll = false) {
     const separator = day !== label ? `<div class="day-label">${escape(label.toUpperCase())}</div>` : ''; day = label;
     const failed = mismatch || event.isDecryptionFailure() || content.msgtype === 'm.bad.encrypted' || !content.msgtype;
     let body = mismatch ? 'Message bloqué : les métadonnées chiffrées ne correspondent pas à l’enveloppe autorisée.' : failed ? `${icon('lock')} Message chiffré · clés indisponibles sur cet appareil. Utilisez la récupération ou la vérification d’appareil.` : `<span class="message-text">${escape(content.body)}</span>`;
-    if (!failed && content.file) body = `<div class="file-card">${icon('file')}<div class="grow"><strong>${escape(content.filename || content.body)}</strong><br><small class="muted">${Math.ceil((content.info?.size || 0) / 1024)} Ko · Chiffré sur l’appareil</small></div><button class="icon-button" data-file="${escape(event.getId())}" aria-label="${content.msgtype === 'm.audio' ? 'Écouter le vocal' : 'Télécharger et déchiffrer'}">${icon(content.msgtype === 'm.audio' ? 'mic' : 'arrow')}</button></div>`;
+    if (!failed && content.file) body = content.msgtype === 'm.audio'
+      ? `<div data-voice="${escape(event.getId())}"></div>`
+      : `<div class="file-card">${icon('file')}<div class="grow"><strong>${escape(content.filename || content.body)}</strong><br><small class="muted">${Math.ceil((content.info?.size || 0) / 1024)} Ko · Chiffré sur l’appareil</small></div><button class="icon-button" data-file="${escape(event.getId())}" aria-label="Télécharger et déchiffrer">${icon('arrow')}</button></div>`;
     const received = receipts.filter(r => r.eventId === event.getId());
     const instruction = meta.is_instruction ? `<div class="instruction-title">${icon('shield')} INSTRUCTION OFFICIELLE</div>` : '';
     const acknowledgment = meta.is_instruction && !failed ? `<footer><button class="primary" data-ack="${escape(event.getId())}" ${received.some(r => r.agentId === state.session.agent.userId) ? 'disabled' : ''}>${received.some(r => r.agentId === state.session.agent.userId) ? 'Lecture signée' : 'Signer la lecture'}</button><span class="receipts">${received.length} accusé(s) signé(s)</span></footer>` : '';
     return `${separator}<article class="message-row ${mine ? 'mine' : ''} ${meta.classification !== 'NORMAL' && meta.classification ? 'restricted' : ''} ${meta.classification === 'CONFIDENTIEL' ? 'confidential' : ''}"><div class="${meta.is_instruction ? 'instruction-box' : ''}">${instruction}<div class="message-bubble">${mine ? '' : `<span class="message-sender">${escape(sender)}</span>`}${body}</div>${acknowledgment}</div><div class="message-time">${date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}${meta.expires_at ? ` · expire dans ${Math.max(0, Math.ceil((meta.expires_at - Date.now()) / 1000))} s` : ''}${meta.classification && meta.classification !== 'NORMAL' ? ` · ${escape(meta.classification.replaceAll('_', ' '))}` : ''}${event.status ? ` · ${escape(event.status)}` : ''}</div></article>`;
   }).join('') || `<div class="empty">${icon('lock')}<h3>Le début de votre conversation</h3><p>Les messages et fichiers sont chiffrés sur vos appareils.</p></div>`;
+  const visibleVocals = new Set();
+  container.querySelectorAll('[data-voice]').forEach(placeholder => {
+    const id = placeholder.dataset.voice; visibleVocals.add(id);
+    voicePlayers.mount(placeholder, id, events.find(e => e.getId() === id).getContent(), content => state.messenger.attachment(content));
+  });
+  voicePlayers.retain(visibleVocals);
   container.querySelectorAll('[data-ack]').forEach(button => button.onclick = busy(button, async () => { await api('/api/receipts/acknowledge', { eventId: button.dataset.ack, roomId: state.room }); await loadReceipts(); }));
   container.querySelectorAll('[data-file]').forEach(button => button.onclick = busy(button, async () => {
     const event = events.find(e => e.getId() === button.dataset.file); const content = event.getContent(); const url = await state.messenger.attachment(content);
-    if (content.msgtype === 'm.audio') { const audio = document.createElement('audio'); audio.controls = true; audio.src = url; button.closest('.file-card').replaceWith(audio); await audio.play(); }
-    else { const link = document.createElement('a'); link.href = url; link.download = content.filename || content.body; link.click(); }
+    const link = document.createElement('a'); link.href = url; link.download = content.filename || content.body; link.click();
   }));
   if (scroll || atBottom) container.scrollTop = container.scrollHeight;
 }
@@ -244,7 +253,7 @@ $('voice').onclick = safe(async () => {
   const media = new MediaRecorder(stream), chunks = [], start = Date.now(), roomId = state.room, meta = composeMeta();
   const recorder = { media, stream, cancelled: false }; state.recorder = recorder;
   media.ondataavailable = event => chunks.push(event.data);
-  media.onstop = async () => { stream.getTracks().forEach(t => t.stop()); if (recorder.cancelled) return; try { await state.messenger.send(roomId, { file: new File(chunks, 'Note-vocale.webm', { type: media.mimeType }), voice: true, meta }); renderTimeline(true); } catch (e) { error(e); } };
+  media.onstop = async () => { stream.getTracks().forEach(t => t.stop()); if (recorder.cancelled) return; try { await state.messenger.send(roomId, { file: new File(chunks, 'Note-vocale.webm', { type: media.mimeType }), voice: true, durationMs: Date.now() - start, meta }); renderTimeline(true); } catch (e) { error(e); } };
   media.start(); $('recording').classList.remove('hidden');
   recorder.timer = setInterval(() => { const sec = Math.floor((Date.now() - start) / 1000); $('recording-time').textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`; if (sec >= 180) $('send-recording').click(); }, 1000);
 });

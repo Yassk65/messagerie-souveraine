@@ -95,9 +95,10 @@ async function run() {
       await admin.locator('#instruction').uncheck();
       await admin.locator('#voice').click(); await admin.locator('#recording').waitFor();
       await admin.waitForTimeout(1500); await admin.locator('#send-recording').click();
-      const voice = director.locator('.file-card').filter({ hasText: 'Note-vocale.webm' }).last();
-      await voice.waitFor({ timeout: 30000 }); await voice.locator('button').click();
-      await director.locator('#timeline audio').waitFor({ timeout: 10000 });
+      const voice = director.locator('.voice-player').last();
+      await voice.waitFor({ timeout: 30000 });
+      await voice.getByRole('button', { name: 'Écouter le message vocal', exact: true }).click();
+      await voice.getByRole('button', { name: 'Mettre le vocal en pause' }).waitFor({ timeout: 10000 });
       console.log('PASS encrypted voice recording and playback');
       if (!secrets._recoveryKey) {
         await admin.locator('#setup-recovery').click();
